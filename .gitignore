@@ -1,0 +1,14 @@
+# Per-machine configuration and project catalog
+apps.json
+settings.json
+webpanel.json
+
+# Logs and generated output
+*.log
+dist/*
+!dist/.gitkeep
+
+# Locally built launchers and installers
+DevOpsPanel.exe
+"DUOCNC DevOps.exe"
+*.pdb

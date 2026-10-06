@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="DevOps">
+<meta name="theme-color" content="#0f172a">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<title>DUOCNC DevOps</title>
+<style>
+  :root {
+    --bg: #f1f5f9; --card: #ffffff; --text: #0f172a; --muted: #64748b; --line: #e2e8f0;
+    --ok: #16a34a; --off: #dc2626; --accent: #2563eb; --warn: #d97706; --btn: #f1f5f9; --btn-text: #0f172a;
+    --orange: #ea580c; --purple: #9333ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1120; --card: #131c2e; --text: #e2e8f0; --muted: #94a3b8; --line: #1e293b;
+      --ok: #4ade80; --off: #f87171; --accent: #60a5fa; --warn: #fbbf24; --btn: #1e293b; --btn-text: #e2e8f0;
+      --orange: #fb923c; --purple: #c084fc;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  /* Màn hình rộng: dàn nhiều cột; điện thoại: 1 cột */
+  .cols { display: grid; gap: 0 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); align-items: start; }
+  .cols[hidden] { display: none; }
+  @media (min-width: 900px) { .tiles { grid-template-columns: repeat(4, 1fr); } #k3s-tiles { grid-template-columns: 1fr 1fr; } }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--btn); color: var(--muted); margin-left: 6px; vertical-align: 1px; }
+  .tag.be { color: var(--accent); }
+  .tag.fe { color: var(--orange); }
+  .tag.bff { color: var(--purple); }
+  .git { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 13px; display: grid; gap: 4px; }
+  .git .actions { margin-top: 6px; }
+  .git select { flex: 1; min-width: 0; min-height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; padding: 0 8px; }
+  .git pre { margin: 6px 0 0; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  .git.bad, .bad { color: var(--off); }
+  .warnc { color: var(--warn); font-weight: 600; }
+  button[aria-expanded="true"] { background: var(--accent); color: #fff; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  header img { width: 44px; height: 44px; border-radius: 10px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .live { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; }
+  .live .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 4px; }
+  .live.err .dot { background: var(--off); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 4px 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .row { padding: 14px; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .row-head { display: flex; align-items: center; gap: 10px; }
+  .status { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--off); }
+  .status.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .name { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 13px; margin-left: auto; text-align: right; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  button {
+    flex: 1; min-height: 44px; border: 0; border-radius: 10px; font: inherit; font-weight: 600;
+    background: var(--btn); color: var(--btn-text); cursor: pointer;
+  }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .45; }
+  button.primary { background: var(--accent); color: #fff; }
+  button.danger { background: color-mix(in srgb, var(--off) 15%, var(--btn)); color: var(--off); }
+  .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .disk { display: flex; align-items: center; gap: 10px; }
+  .bar { flex: 1; height: 8px; background: var(--btn); border-radius: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .bar > i.warn { background: var(--warn); }
+  .bar > i.full { background: var(--off); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
+  .info { padding: 14px; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  .info span:nth-child(odd) { color: var(--muted); }
+  .info span:nth-child(even) { text-align: right; word-break: break-all; }
+  #toast {
+    position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(120px);
+    background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px;
+    transition: transform .25s; max-width: calc(100% - 32px); z-index: 9;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  .spin { opacity: .6; pointer-events: none; }
+  .alert { background: color-mix(in srgb, var(--off) 12%, var(--card)); color: var(--off); border: 1px solid color-mix(in srgb, var(--off) 35%, transparent);
+          border-radius: 12px; padding: 10px 14px; margin-top: 12px; font-weight: 600; font-size: 14px; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+  .tile { background: var(--card); padding: 12px 14px; }
+  .tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .tile .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0 6px; }
+  .tile .s { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .spark { padding: 12px 14px 4px; border-top: 1px solid var(--line); }
+  .spark svg { width: 100%; height: 80px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  .legend .r { margin-left: auto; }
+  .tops { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+  .tops > div { background: var(--card); padding: 10px 12px; min-width: 0; }
+  .th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .tops table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  .tops td { padding: 3px 0; }
+  .tops td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tops td:last-child { text-align: right; width: 64px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  @media (max-width: 380px) { .tops { grid-template-columns: 1fr; } }
+  .pod .row-head { align-items: flex-start; }
+  .pod .status { margin-top: 6px; }
+  .pod .pname { font-weight: 600; word-break: break-all; font-size: 14px; }
+  .pod .pmeta { color: var(--muted); font-size: 12px; }
+  .pod .bad { color: var(--off); font-weight: 600; }
+  .pod .actions button { min-height: 36px; font-size: 13px; }
+  dialog { width: min(100% - 24px, 760px); max-height: 85vh; padding: 0; border: 1px solid var(--line); border-radius: 14px;
+           background: var(--card); color: var(--text); }
+  dialog::backdrop { background: rgb(0 0 0 / .5); }
+  dialog header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin: 0; border-bottom: 1px solid var(--line); }
+  dialog header b { flex: 1; font-size: 13px; word-break: break-all; }
+  dialog header button { flex: none; min-height: 34px; padding: 0 12px; font-size: 13px; }
+  dialog pre { margin: 0; padding: 12px; max-height: calc(85vh - 60px); overflow: auto; font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+               white-space: pre-wrap; word-break: break-all; }
+  .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; padding: 4px; margin: 0 0 4px;
+          background: var(--btn); border-radius: 12px; }
+  .tabs button { min-height: 38px; background: transparent; color: var(--muted); }
+  .tabs button[aria-selected="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/icon.png" alt="">
+    <div>
+      <h1>DUOCNC DevOps</h1>
+      <div class="sub" id="host">Đang kết nối…</div>
+    </div>
+    <div class="live" id="live"><span class="dot"></span><span id="time">--</span></div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="services" aria-selected="true">Dịch vụ</button>
+    <button role="tab" data-tab="apps" aria-selected="false">Ứng dụng</button>
+    <button role="tab" data-tab="health" aria-selected="false">Sức khỏe</button>
+    <button role="tab" data-tab="k3s" aria-selected="false">K3s</button>
+  </nav>
+
+  <section id="tab-apps" hidden>
+    <h2 id="apps-sum">Ứng dụng · cập nhật mỗi 5 giây</h2>
+    <div class="cols" id="apps-list"><div class="card"><div class="row note">Đang quét các port…</div></div></div>
+    <p class="note" style="text-align:center">Danh mục app nằm trong <b>devops-panel/apps.json</b>. Link localhost chỉ mở được trên máy tính.</p>
+  </section>
+
+  <section id="tab-k3s" hidden>
+    <h2>K3s · cập nhật mỗi 10 giây</h2>
+    <div class="card">
+      <div class="tiles" id="k3s-tiles"><div class="tile"><div class="k">Đang tải…</div></div></div>
+    </div>
+    <div id="k3s-pods" class="cols"></div>
+    <p class="note" style="text-align:center">k9s là giao diện terminal, mở trên máy tính bằng nút "Mở k9s" trong app.</p>
+  </section>
+
+  <section id="tab-health" hidden>
+  <div id="warn" class="alert" hidden></div>
+  <h2>Sức khỏe · cập nhật mỗi 3 giây</h2>
+  <div class="card">
+    <div class="tiles" id="tiles"><div class="tile"><div class="k">Đang đo…</div></div></div>
+    <div class="spark">
+      <div class="legend"><span><i style="background:var(--accent)"></i>CPU</span><span><i style="background:var(--orange)"></i>RAM</span><span class="r">3 phút gần nhất</span></div>
+      <svg id="spark" viewBox="0 0 300 80" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="row note" id="netline" style="margin:0"></div>
+    <div class="tops">
+      <div><div class="th">Ăn CPU nhiều nhất</div><table id="topcpu"></table></div>
+      <div><div class="th">Ăn RAM nhiều nhất</div><table id="topram"></table></div>
+    </div>
+  </div>
+  </section>
+
+  <section id="tab-services" class="cols">
+  <div>
+  <h2>Dịch vụ</h2>
+  <div class="card" id="components"></div>
+  </div>
+
+  <div>
+  <h2>Ổ đĩa</h2>
+  <div class="card" id="disks"></div>
+
+  <h2>Máy tính</h2>
+  <div class="card">
+    <div class="info" id="info"></div>
+    <div class="grid">
+      <button onclick="power('sleep', 'Cho máy tính ngủ (Sleep)? Sau đó phải đánh thức tại máy mới dùng lại được.')">💤 Sleep</button>
+      <button onclick="power('restart', 'Khởi động lại máy tính sau 15 giây?')">🔄 Khởi động lại</button>
+      <button class="danger" onclick="power('shutdown', 'TẮT máy tính sau 15 giây? Sau khi tắt sẽ không bật lại từ xa được.')">⏻ Tắt máy</button>
+      <button onclick="power('cancel')">✋ Huỷ lệnh tắt</button>
+    </div>
+  </div>
+  </div>
+  </section>
+  <p class="note" style="text-align:center;margin-top:18px">Chỉ truy cập được qua Tailscale · <span id="user"></span></p>
+</div>
+<div id="toast"></div>
+<dialog id="logdlg">
+  <header>
+    <b id="logtitle"></b>
+    <button id="logprev">Lần chạy trước</button>
+    <button onclick="document.getElementById('logdlg').close()">Đóng</button>
+  </header>
+  <pre id="logtext"></pre>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let busy = false;
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function api(path, method = 'GET') {
+  const r = await fetch(path, { method, headers: method === 'POST' ? { 'X-DevOps': '1' } : {} });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function render(s) {
+  $('#host').textContent = `${s.host} · bật ${s.uptime.replace('.', ' ngày ').replace(/^0 ngày /, '')}`;
+  $('#time').textContent = s.time.split(' ')[0];
+  $('#user').textContent = s.user;
+  $('#live').classList.remove('err');
+
+  $('#components').innerHTML = s.components.map(c => `
+    <div class="row" data-id="${esc(c.id)}">
+      <div class="row-head">
+        <span class="status ${c.running ? 'on' : ''}"></span>
+        <span class="name">${esc(c.name)}</span>
+        <span class="meta">${c.port ? ':' + esc(c.port) + ' · ' : ''}${c.running ? 'Đang chạy' : 'Đã dừng'}</span>
+      </div>
+      ${c.remote ? `
+      <div class="actions">
+        <button class="primary" ${c.running ? 'disabled' : ''} onclick="act('${esc(c.id)}','start',this)">Start</button>
+        <button ${c.running ? '' : 'disabled'} onclick="act('${esc(c.id)}','stop',this)">Stop</button>
+        <button ${c.running ? '' : 'disabled'} onclick="act('${esc(c.id)}','restart',this)">Restart</button>
+      </div>` : `<div class="note">${c.id === 'tailscale' ? 'Kết nối hiện tại đang đi qua Tailscale' : 'Cần quyền Admin, chỉ bật/tắt được trên máy tính'}</div>`}
+    </div>`).join('');
+
+  $('#disks').innerHTML = s.disks.map(d => `
+    <div class="row disk">
+      <span class="name" style="width:28px">${esc(d.Drive)}</span>
+      <div class="bar"><i class="${d.UsedPct >= 90 ? 'full' : d.UsedPct >= 75 ? 'warn' : ''}" style="width:${d.UsedPct}%"></i></div>
+      <span class="meta" style="margin-left:0;min-width:110px">còn ${d.FreeGB} / ${d.SizeGB} GB</span>
+    </div>`).join('');
+
+  const ts = s.tailscale || {};
+  $('#info').innerHTML = `
+    <span>Tên máy</span><span>${esc(s.host)}</span>
+    <span>IP Tailscale</span><span>${esc(ts.IP || '-')}</span>
+    <span>Postgres Ubuntu</span><span>${esc(ts.IP || 'localhost')}:5434</span>`;
+}
+
+const hist = { cpu: [], ram: [] };
+const HIST_MAX = 60;
+const fmtMB = mb => mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+const barCls = p => p >= 90 ? 'full' : p >= 75 ? 'warn' : '';
+
+function tile(k, v, pct, sub, cls = barCls(pct)) {
+  return `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>
+    <div class="bar"><i class="${cls}" style="width:${Math.min(100, pct)}%"></i></div>
+    <div class="s">${sub}</div></div>`;
+}
+
+function line(data, color) {
+  if (data.length < 2) return '';
+  const step = 300 / (HIST_MAX - 1), off = HIST_MAX - data.length;
+  const pts = data.map((v, i) => `${((off + i) * step).toFixed(1)},${(78 - v * 0.76).toFixed(1)}`).join(' ');
+  return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+}
+
+function renderHealth(h) {
+  if (!h) return;
+  hist.cpu.push(h.Cpu); hist.ram.push(h.RamPct);
+  if (hist.cpu.length > HIST_MAX) { hist.cpu.shift(); hist.ram.shift(); }
+
+  const wslPct = h.RamTotalGB ? Math.round(h.WslMB / 1024 * 100 / h.RamTotalGB) : 0;
+  const b = h.Battery;
+  $('#tiles').innerHTML =
+    tile('CPU', h.Cpu + '%', h.Cpu, `${h.Cores} luồng`) +
+    tile('RAM', h.RamPct + '%', h.RamPct, `${h.RamUsedGB} / ${h.RamTotalGB} GB`) +
+    tile('WSL', fmtMB(h.WslMB), wslPct, 'Ubuntu + Docker') +
+    (b ? tile('Pin', b.Percent + '%', b.Percent, b.Charging ? '⚡ đang sạc' : 'đang dùng pin',
+              b.Charging ? '' : b.Percent <= 20 ? 'full' : b.Percent <= 40 ? 'warn' : '')
+       : tile('Pin', '—', 0, 'Không có pin'));
+
+  const css = getComputedStyle(document.documentElement);
+  const grid = [25, 50, 75].map(p => `<line x1="0" x2="300" y1="${78 - p * 0.76}" y2="${78 - p * 0.76}" stroke="${css.getPropertyValue('--line')}" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+  $('#spark').innerHTML = grid + line(hist.ram, css.getPropertyValue('--orange')) + line(hist.cpu, css.getPropertyValue('--accent'));
+
+  const up = h.Uptime.replace(/^(\d+)\./, '$1 ngày ').replace(/^0 ngày /, '');
+  $('#netline').textContent = `Mạng ↓ ${h.NetDownKB} KB/s · ↑ ${h.NetUpKB} KB/s · Máy đã bật ${up}`;
+
+  const rows = (list, f) => list.map(r => `<tr><td>${esc(r.Name)}${r.Count > 1 ? ` <span style="color:var(--muted)">(${r.Count})</span>` : ''}</td><td>${f(r)}</td></tr>`).join('');
+  $('#topcpu').innerHTML = rows(h.TopCpu, r => r.Cpu.toFixed(1) + '%');
+  $('#topram').innerHTML = rows(h.TopRam, r => fmtMB(r.RamMB));
+
+  const w = $('#warn');
+  w.hidden = !h.Warnings.length;
+  w.innerHTML = h.Warnings.map(x => '⚠ ' + esc(x)).join('<br>');
+}
+
+function offline() { $('#live').classList.add('err'); $('#time').textContent = 'mất kết nối'; }
+
+async function refresh() {
+  if (busy) return;
+  try { render(await api('/api/status')); }
+  catch (e) { offline(); }
+}
+
+let healthBusy = false;
+async function refreshHealth() {
+  if (healthBusy) return;
+  healthBusy = true;
+  try {
+    renderHealth(await api('/api/health'));
+    $('#live').classList.remove('err');
+    $('#time').textContent = new Date().toLocaleTimeString('vi-VN');
+  } catch (e) { offline(); }
+  healthBusy = false;
+}
+
+// ---------- K3s ----------
+let k3sBusy = false;
+async function refreshK3s() {
+  if (k3sBusy) return;
+  k3sBusy = true;
+  try {
+    renderK3s(await api('/api/k3s'));
+    $('#live').classList.remove('err');
+    $('#time').textContent = new Date().toLocaleTimeString('vi-VN');
+  } catch (e) { offline(); }
+  k3sBusy = false;
+}
+
+function renderK3s(k) {
+  if (!k.Running) {
+    $('#k3s-tiles').innerHTML = `<div class="tile" style="grid-column:1/-1"><div class="k">K3s</div><div class="v" style="color:var(--off)">Đã dừng</div><div class="s">${esc(k.Reason)} · bật lại ở tab Dịch vụ</div></div>`;
+    $('#k3s-pods').innerHTML = '';
+    return;
+  }
+  const node = (k.Nodes || [])[0] || {};
+  $('#k3s-tiles').innerHTML =
+    tile('Node', esc(node.Status || '?'), node.Status === 'Ready' ? 100 : 0, `${esc(node.Name || '')} · ${esc(node.Version || '')}`, node.Status === 'Ready' ? '' : 'full') +
+    tile('Pod OK', `${k.Healthy}/${k.Total}`, k.Total ? k.Healthy * 100 / k.Total : 0, `${k.Namespaces} namespace`, k.Unhealthy ? 'warn' : '');
+
+  const groups = {};
+  for (const p of k.Pods) (groups[p.Namespace] ??= []).push(p);
+  // namespace có pod lỗi lên đầu
+  const order = Object.keys(groups).sort((a, b) =>
+    (groups[a].some(p => !p.Healthy) ? 0 : 1) - (groups[b].some(p => !p.Healthy) ? 0 : 1) || a.localeCompare(b));
+
+  $('#k3s-pods').innerHTML = order.map(ns => `<div>
+    <h2>${esc(ns)}</h2>
+    <div class="card">${groups[ns].map(p => `
+      <div class="row pod">
+        <div class="row-head">
+          <span class="status ${p.Healthy ? 'on' : ''}"></span>
+          <div style="min-width:0;flex:1">
+            <div class="pname">${esc(p.Name)}</div>
+            <div class="pmeta"><span class="${p.Healthy ? '' : 'bad'}">${esc(p.Status)}</span> · ready ${esc(p.Ready)} · restart ${p.Restarts} · ${esc(p.Age)}</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button onclick="podLogs('${esc(p.Namespace)}','${esc(p.Name)}')">📄 Log</button>
+          ${p.Owner && p.Owner !== 'Job' ? `<button onclick="podRestart('${esc(p.Namespace)}','${esc(p.Name)}', this)">🔄 Restart pod</button>` : ''}
+        </div>
+      </div>`).join('')}
+    </div></div>`).join('');
+}
+
+let logTarget = null;
+async function showLog(title, url, showPrev) {
+  $('#logtitle').textContent = title;
+  $('#logprev').hidden = !showPrev;
+  $('#logtext').textContent = 'Đang tải log…';
+  const dlg = $('#logdlg');
+  if (!dlg.open) dlg.showModal();
+  try {
+    const t = await (await fetch(url)).text();
+    $('#logtext').textContent = t.trim() || '(không có log)';
+    $('#logtext').scrollTop = $('#logtext').scrollHeight;
+  } catch (e) { $('#logtext').textContent = 'Lỗi: ' + e.message; }
+}
+function podLogs(ns, pod, previous = false) {
+  logTarget = { ns, pod, previous };
+  $('#logprev').textContent = previous ? 'Lần chạy hiện tại' : 'Lần chạy trước';
+  showLog(`${ns}/${pod}${previous ? ' (lần chạy trước)' : ''}`,
+    `/api/k3s/logs/${encodeURIComponent(ns)}/${encodeURIComponent(pod)}/${previous ? 'previous' : 'current'}`, true);
+}
+
+// ---------- Ứng dụng ----------
+let appsBusy = false;
+async function refreshApps() {
+  if (appsBusy) return;
+  appsBusy = true;
+  try {
+    const apps = await api('/api/apps');
+    // Đang chọn nhánh trong dropdown thì không vẽ lại (tránh dropdown bị đóng)
+    if (document.activeElement?.tagName === 'SELECT') lastApps = apps; else renderApps(apps);
+    $('#live').classList.remove('err');
+    $('#time').textContent = new Date().toLocaleTimeString('vi-VN');
+  } catch (e) { offline(); }
+  appsBusy = false;
+}
+
+// ---------- Git của từng project ----------
+const gitOpen = {};          // id -> null (đang tải) | thông tin git | { error }
+let lastApps = [];
+
+function gitBlock(id, g) {
+  if (!g) return `<div class="git note">Đang đọc git…</div>`;
+  if (g.error) return `<div class="git bad">${esc(g.error)}</div>`;
+  if (!g.IsRepo) return `<div class="git note">Thư mục này không nằm trong git repo.</div>`;
+  const sync = g.Upstream
+    ? `→ ${esc(g.Upstream)} · <span class="${g.Behind ? 'bad' : ''}">↓${g.Behind}</span> <span>↑${g.Ahead}</span>`
+    : '<span class="bad">chưa có upstream</span>';
+  const opts = g.Branches.map(b => `<option ${b === g.Branch ? 'selected' : ''}>${esc(b)}</option>`).join('');
+  return `<div class="git">
+    <div><b>⎇ ${esc(g.Branch)}</b> ${sync} · <span class="${g.Dirty ? 'warnc' : ''}">${g.Dirty} file đang sửa</span></div>
+    <div class="note">${esc(g.LastHash)} ${esc(g.LastMsg)} — ${esc(g.LastAuthor)}, ${esc(g.LastWhen)}</div>
+    <div class="note" style="word-break:break-all">${esc(g.Root)}${g.LastFetch ? ` · fetch lúc ${esc(g.LastFetch)}` : ''}</div>
+    ${g.Dirty ? `<details class="note"><summary>Xem file đang sửa</summary><pre>${esc(g.Changes.join('\n'))}${g.Dirty > g.Changes.length ? '\n…' : ''}</pre></details>` : ''}
+    <div class="actions">
+      <button onclick="gitAct('${esc(id)}','fetch',this)">Fetch</button>
+      <button class="primary" onclick="gitAct('${esc(id)}','pull',this)">Pull${g.Behind ? ` (${g.Behind})` : ''}</button>
+    </div>
+    <div class="actions">
+      <select id="br-${esc(id)}">${opts}</select>
+      <button onclick="gitSwitch('${esc(id)}',this)">Chuyển nhánh</button>
+    </div>
+  </div>`;
+}
+
+async function loadGit(id) {
+  try { gitOpen[id] = await api(`/api/apps/git/${encodeURIComponent(id)}`); }
+  catch (e) { gitOpen[id] = { error: e.message }; }
+  if (id in gitOpen) renderApps(lastApps);
+}
+function toggleGit(id) {
+  if (id in gitOpen) { delete gitOpen[id]; renderApps(lastApps); return; }
+  gitOpen[id] = null; renderApps(lastApps); loadGit(id);
+}
+async function gitAct(id, action, btn, branch) {
+  btn.disabled = true; toast(`git ${action}…`);
+  const tail = branch ? '/' + encodeURIComponent(branch) : '';
+  try { const r = await api(`/api/apps/git/${encodeURIComponent(id)}/${action}${tail}`, 'POST'); toast(String(r.message).slice(0, 220)); }
+  catch (e) { toast(String(e.message).slice(0, 220)); }
+  loadGit(id);
+}
+function gitSwitch(id, btn) {
+  const b = document.getElementById('br-' + id).value;
+  if (gitOpen[id]?.Branch === b) { toast('Đang ở nhánh này rồi'); return; }
+  if (confirm(`Chuyển project sang nhánh "${b}"?`)) gitAct(id, 'switch', btn, b);
+}
+
+function renderApps(apps) {
+  lastApps = apps;
+  const run = apps.filter(a => a.Running).length;
+  $('#apps-sum').textContent = `Ứng dụng · ${run} đang chạy · cập nhật mỗi 5 giây`;
+  const groups = {};
+  for (const a of apps) (groups[a.Group] ??= []).push(a);
+  // nhóm có app đang chạy lên đầu
+  const order = Object.keys(groups).sort((x, y) =>
+    (groups[x].some(a => a.Running) ? 0 : 1) - (groups[y].some(a => a.Running) ? 0 : 1));
+  $('#apps-list').innerHTML = order.map(g => `<div>
+    <h2>${esc(g)}</h2>
+    <div class="card">${groups[g].map(a => `
+      <div class="row pod">
+        <div class="row-head">
+          <span class="status ${a.Running ? 'on' : ''}"></span>
+          <div style="min-width:0;flex:1">
+            <div class="pname">${esc(a.Name)}<span class="tag ${({ frontend: 'fe', bff: 'bff', tool: '' })[a.Type] ?? 'be'}">${({ frontend: 'FE', bff: 'BFF', tool: 'TOOL' })[a.Type] || 'BE'}</span></div>
+            <div class="pmeta">${a.Port ? ':' + a.Port : 'chạy 1 lần'} ·${a.Running ? `Đang chạy · PID ${a.Pid}` : a.Busy ? `<span class="bad">Port bị ${esc(a.Process)} chiếm</span>` : 'Đã dừng'}</div>
+          </div>
+        </div>
+        <div class="actions">
+          ${a.Known ? `<button class="primary" ${a.Running ? 'disabled' : ''} onclick="appAct('${esc(a.Id)}','start',this)">Start</button>` : ''}
+          <button ${a.Running ? '' : 'disabled'} onclick="appAct('${esc(a.Id)}','stop',this)">Stop</button>
+          ${a.Known ? `<button onclick="appLog('${esc(a.Id)}','${esc(a.Name)}')">📄 Log</button>` : ''}
+          ${a.Known ? `<button aria-expanded="${a.Id in gitOpen}" onclick="toggleGit('${esc(a.Id)}')">⎇ Git</button>` : ''}
+        </div>
+        ${a.Id in gitOpen ? gitBlock(a.Id, gitOpen[a.Id]) : ''}
+      </div>`).join('')}
+    </div></div>`).join('');
+}
+
+async function appAct(id, action, btn) {
+  if (action === 'stop' && !confirm('Dừng ứng dụng này?')) return;
+  const row = btn.closest('.row'); row.classList.add('spin');
+  try { const r = await api(`/api/apps/${encodeURIComponent(id)}/${action}`, 'POST'); toast(r.message || 'Đã gửi lệnh'); }
+  catch (e) { toast('Lỗi: ' + e.message); }
+  row.classList.remove('spin');
+  setTimeout(refreshApps, 1500);
+}
+function appLog(id, name) { showLog(`${name} · log`, `/api/apps/log/${encodeURIComponent(id)}`, false); }
+$('#logprev').addEventListener('click', () => logTarget && podLogs(logTarget.ns, logTarget.pod, !logTarget.previous));
+
+async function podRestart(ns, pod, btn) {
+  if (!confirm(`Khởi động lại pod ${ns}/${pod}?\nPod sẽ bị xoá và Kubernetes tạo pod mới thay thế.`)) return;
+  btn.disabled = true;
+  try { const r = await api(`/api/k3s/restart/${encodeURIComponent(ns)}/${encodeURIComponent(pod)}`, 'POST'); toast(r.message || 'Đã gửi lệnh'); }
+  catch (e) { toast('Lỗi: ' + e.message); }
+  setTimeout(refreshK3s, 2000);
+}
+
+// Chỉ tab đang mở mới được cập nhật: Dịch vụ 5s, Sức khỏe 3s, K3s 10s; trang ẩn thì dừng hẳn
+const TABS = { services: { fn: refresh, ms: 5000 }, apps: { fn: refreshApps, ms: 5000 }, health: { fn: refreshHealth, ms: 3000 }, k3s: { fn: refreshK3s, ms: 10000 } };
+let current = 'services', timer = null;
+
+function schedule() {
+  clearInterval(timer); timer = null;
+  if (document.hidden) return;
+  const t = TABS[current];
+  t.fn();
+  timer = setInterval(t.fn, t.ms);
+}
+
+function showTab(name) {
+  current = TABS[name] ? name : 'services';
+  document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === current));
+  $('#tab-services').hidden = current !== 'services';
+  $('#tab-health').hidden = current !== 'health';
+  $('#tab-k3s').hidden = current !== 'k3s';
+  $('#tab-apps').hidden = current !== 'apps';
+  try { localStorage.setItem('tab', current); } catch (e) {}
+  schedule();
+}
+
+async function act(id, action, btn) {
+  const row = btn.closest('.row'); row.classList.add('spin'); busy = true;
+  toast('Đang thực hiện…');
+  try { const r = await api(`/api/component/${id}/${action}`, 'POST'); toast(r.message); }
+  catch (e) { toast('Lỗi: ' + e.message); }
+  busy = false; row.classList.remove('spin'); refresh();
+}
+
+async function power(action, question) {
+  if (question && !confirm(question)) return;
+  try { const r = await api(`/api/power/${action}`, 'POST'); toast(r.message); }
+  catch (e) { toast('Lỗi: ' + e.message); }
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+document.addEventListener('visibilitychange', schedule);
+let saved = 'services';
+try { saved = localStorage.getItem('tab') || 'services'; } catch (e) {}
+if (saved !== 'services') refresh();   // vẫn lấy tên máy, user cho header
+showTab(saved);
+</script>
+</body>
+</html>
