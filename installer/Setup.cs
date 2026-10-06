@@ -17,14 +17,15 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("DevOps Panel Setup")]
 [assembly: AssemblyProduct("DevOps Panel")]
 [assembly: AssemblyDescription("Bộ cài DevOps Panel")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.4.1.0")]
+[assembly: AssemblyFileVersion("1.4.1.0")]
 
 static class Setup
 {
     const string ProductId = "DevOpsPanel";
-    const string Version = "1.1.1";
+    const string Version = "1.4.1";
     const string ExeName = "DevOpsPanel.exe";
+    const string SupportEmail = "coduoc2502@gmail.com";
 
     [STAThread]
     static int Main(string[] args)
@@ -37,7 +38,8 @@ static class Setup
         {
             string msg = "Cài đặt " + appName + " " + Version + " vào:\n" + installDir +
                 "\n\nYêu cầu: Windows 10/11 (đã có sẵn PowerShell 5.1 và .NET Framework 4.8).\n" +
-                "WSL, PostgreSQL, Docker, K3s là tuỳ chọn - panel tự nhận những gì máy đang có.\n\nTiếp tục?";
+                "WSL, PostgreSQL, Docker, K3s là tuỳ chọn - panel tự nhận những gì máy đang có.\n\n" +
+                "Hỗ trợ: " + SupportEmail + "\n\nTiếp tục?";
             if (MessageBox.Show(msg, appName + " Setup", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return 1;
         }
 
@@ -83,6 +85,8 @@ static class Setup
                 k.SetValue("DisplayName", appName);
                 k.SetValue("DisplayVersion", Version);
                 k.SetValue("Publisher", "DevOps Panel");
+                k.SetValue("Contact", SupportEmail);
+                k.SetValue("HelpLink", "mailto:" + SupportEmail);
                 k.SetValue("DisplayIcon", exe + ",0");
                 k.SetValue("InstallLocation", installDir);
                 k.SetValue("UninstallString", "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
@@ -103,7 +107,7 @@ static class Setup
         }
         catch (Exception ex)
         {
-            if (!silent) MessageBox.Show("Cài đặt thất bại:\n\n" + ex.Message, appName + " Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!silent) MessageBox.Show("Cài đặt thất bại:\n\n" + ex.Message + "\n\nCần hỗ trợ: " + SupportEmail, appName + " Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 2;
         }
     }

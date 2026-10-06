@@ -13,6 +13,19 @@ $fx    = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319"
 $sma   = Get-ChildItem "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation" -Recurse -Filter System.Management.Automation.dll |
          Select-Object -First 1 -ExpandProperty FullName
 
+# Số phiên bản lấy từ $PanelVersion trong DevOpsCore.ps1 (nguồn duy nhất)
+$ver = [regex]::Match((Get-Content "$here\DevOpsCore.ps1" -Raw -Encoding UTF8), "\`$PanelVersion\s*=\s*'(\d+\.\d+\.\d+)'").Groups[1].Value
+if (-not $ver) { throw 'Không đọc được $PanelVersion trong DevOpsCore.ps1' }
+$utf8Bom = New-Object System.Text.UTF8Encoding($true)
+foreach ($f in "$here\app\DevOpsApp.cs", "$here\installer\Setup.cs", "$here\install.ps1") {
+    $t = [IO.File]::ReadAllText($f)
+    $t = $t -replace 'Version\("\d+\.\d+\.\d+\.\d+"\)', "Version(`"$ver.0`")" `
+            -replace 'const string Version = "[^"]*";', "const string Version = `"$ver`";" `
+            -replace "DisplayVersion  = '[^']*'", "DisplayVersion  = '$ver'"
+    [IO.File]::WriteAllText($f, $t, $utf8Bom)
+}
+Write-Host "== Phiên bản $ver"
+
 Remove-Item $stage, $zip, $setup -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage, (Join-Path $stage 'wsl') | Out-Null
 
@@ -35,4 +48,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Build setup lỗi' }
 
 Remove-Item $stage, $zip -Recurse -Force
 $size = [math]::Round((Get-Item $setup).Length / 1KB)
-Write-Host "Xong: $setup ($size KB)"
+Write-Host "Xong: $setup ($size KB) - phiên bản $ver"

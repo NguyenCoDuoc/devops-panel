@@ -45,7 +45,7 @@ $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DUOCNC.DevOps'
 New-Item -Path $key -Force | Out-Null
 $props = @{
     DisplayName     = $AppName
-    DisplayVersion  = '1.1.1'
+    DisplayVersion  = '1.4.1'
     Publisher       = 'DUOCNC'
     DisplayIcon     = "$exe,0"
     InstallLocation = $here
