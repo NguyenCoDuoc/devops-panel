@@ -18,7 +18,7 @@ $CoreShared = @{ WslDistros = $WslDistros; Distro = $Distro; Components = $Compo
 $IconFile    = Join-Path $PSScriptRoot 'icon.ico'
 $AppIcon     = if (Test-Path $IconFile) { New-Object System.Drawing.Icon($IconFile) } else { [System.Drawing.SystemIcons]::Application }
 $LauncherExe = Find-FirstPath @((Join-Path $PSScriptRoot 'DevOpsPanel.exe'), (Join-Path $PSScriptRoot 'DUOCNC DevOps.exe'))
-$HasWebPanel = Test-Path (Join-Path $PSScriptRoot 'WebPanel.ps1')     # bản cài phát cho người khác không kèm Web Panel
+$HasWebPanel = Test-Path (Join-Path $PSScriptRoot 'WebPanel.ps1')     # Web Panel là bản trả phí: chỉ có khi đặt WebPanel.ps1 cạnh script
 
 # ---------- Settings (config.json trong %APPDATA%\DevOpsPanel) ----------
 function Get-Settings { $PanelConfig }

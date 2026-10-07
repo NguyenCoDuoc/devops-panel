@@ -12,3 +12,8 @@ dist/*
 DevOpsPanel.exe
 "DUOCNC DevOps.exe"
 *.pdb
+
+# Web Panel: bản trả phí, giữ ở máy, không đưa lên repo
+WebPanel.ps1
+webpanel.html
+webpanel.json

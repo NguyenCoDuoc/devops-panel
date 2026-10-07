@@ -1,4 +1,4 @@
-﻿# DevOps Panel - logic dùng chung cho DevOpsPanel.ps1 (desktop) và WebPanel.ps1 (web qua Tailscale, chỉ có khi cài từ mã nguồn)
+﻿# DevOps Panel - logic dùng chung cho DevOpsPanel.ps1 (desktop) và Web Panel (bản trả phí, không nằm trong repo)
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt

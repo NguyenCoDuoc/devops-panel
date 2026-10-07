@@ -1,5 +1,5 @@
 ﻿# Đóng gói DevOps Panel thành một file cài: dist\DevOpsPanel-Setup.exe
-# Bản phát cho người khác KHÔNG kèm Web Panel (WebPanel.ps1 / webpanel.html) và dữ liệu riêng của máy này
+# Bản phát KHÔNG kèm Web Panel (bản trả phí) và dữ liệu riêng của máy này
 # (apps.json, settings.json, logs). Chỉ dùng công cụ có sẵn trong Windows (csc.exe của .NET Framework 4).
 # Chạy: powershell -NoProfile -ExecutionPolicy Bypass -File build-setup.ps1
 $ErrorActionPreference = 'Stop'
