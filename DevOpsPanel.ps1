@@ -165,7 +165,7 @@ $IconRules = @(
     @('Chọn', 'E762', 'Text'), @('Khôi phục', 'E81C', 'Text'), @('Hiện cột', 'E9D9', 'Text'), @('Describe', 'E946', 'Text'),
     @('Chẩn đoán', 'E9D9', 'Text'), @('Xuất danh mục', 'E898', 'Text'), @('Nhập danh mục', 'E896', 'Text'), @('Sửa apps.json', 'E70F', 'Text'),
     @('Đổi tên', 'E70F', 'Text'), @('Xoá', 'E74D', 'Text'), @('Lưu và mở lại', 'E73E', 'Text'), @('Trợ giúp', 'E9CE', 'Text'),
-    @('Thoát', 'E711', 'Text'), @('Cài đặt', 'E713', 'Text'), @('Hiện mật khẩu', 'E8D7', 'Text')
+    @('Thoát', 'E711', 'Text'), @('Cài đặt', 'E713', 'Text'), @('Hiện mật khẩu', 'E8D7', 'Text'), @('Kiểm tra cập nhật', 'E895', 'Text'), @('Cài bản mới', 'E896', 'Ok'), @('Xem trên GitHub', 'E8A7', 'Text'), @('Cập nhật', 'E896', 'Ok')
 )
 $TabIcons = @{ 'Dịch vụ' = 'E9F5'; 'Ứng dụng' = 'E74C'; 'Git' = 'F003'; 'Sức khỏe' = 'E95E'; 'K3s' = 'E7B8'; 'Cài đặt' = 'E713'; 'Trợ giúp' = 'E9CE' }
 
@@ -418,6 +418,12 @@ $statusLbl.Size = New-Object System.Drawing.Size(516, 22)
 $statusLbl.ForeColor = $Theme.Muted
 $form.Controls.Add($statusLbl)
 function Set-Status([string]$t) { $statusLbl.Text = $t }
+$lnkUpdate = New-Object System.Windows.Forms.LinkLabel
+$lnkUpdate.AutoSize = $true; $lnkUpdate.Visible = $false; $lnkUpdate.LinkBehavior = 'HoverUnderline'
+$lnkUpdate.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$lnkUpdate.Location = New-Object System.Drawing.Point(330, 582)
+$lnkUpdate.Add_LinkClicked({ Show-UpdateDialog })
+$form.Controls.Add($lnkUpdate); $lnkUpdate.BringToFront()
 
 function Update-Status {
     foreach ($item in $list.Items) {
@@ -2459,13 +2465,38 @@ $lblDataDir.ForeColor = $Theme.Muted; $lblDataDir.AutoEllipsis = $true
 $lblHelpTitle = New-Label $AppName 12 10 490 $pageHelp
 $lblHelpTitle.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
 $lblHelpTitle.Height = 30
-$lblHelpVer = New-Label "Phiên bản $PanelVersion  ·  PowerShell $($PSVersionTable.PSVersion)  ·  Windows $([Environment]::OSVersion.Version)" 12 42 490 $pageHelp
+$lblHelpVer = New-Label "PowerShell $($PSVersionTable.PSVersion)  ·  Windows $([Environment]::OSVersion.Version)  ·  $env:COMPUTERNAME" 12 42 490 $pageHelp      # số phiên bản nằm ở dòng cập nhật bên dưới
+# Dòng phiên bản: chữ thường + các link (phiên bản mới nhất -> trang GitHub, Cài bản mới, Kiểm tra lại)
+$lnkUpd = New-Object System.Windows.Forms.LinkLabel
+$lnkUpd.Location = New-Object System.Drawing.Point(12, 66); $lnkUpd.Size = New-Object System.Drawing.Size(498, 22)
+$lnkUpd.LinkBehavior = 'HoverUnderline'
+$lnkUpd.Add_LinkClicked({
+    param($sender, $e)
+    switch ([string]$e.Link.LinkData) {
+        'release'  { Start-Process $(if ($script:latestRel) { $script:latestRel.Url } else { "https://github.com/$UpdateRepo/releases" }) }
+        'releases' { Start-Process "https://github.com/$UpdateRepo/releases" }
+        'install'  { Show-UpdateDialog }
+        'check'    { Start-UpdateCheck -Manual }
+    }
+})
+$pageHelp.Controls.Add($lnkUpd)
+# Ghép dòng từ các phần @(chữ, dữ liệu link hoặc $null)
+function Set-UpdLine([object[]]$parts, $color) {
+    $text = ''; $links = @()
+    foreach ($pt in $parts) {
+        if ($pt[1]) { $links += , @($text.Length, $pt[0].Length, $pt[1]) }
+        $text += $pt[0]
+    }
+    $lnkUpd.Links.Clear(); $lnkUpd.Text = $text; $lnkUpd.Links.Clear()
+    foreach ($l in $links) { [void]$lnkUpd.Links.Add($l[0], $l[1], $l[2]) }
+    $lnkUpd.ForeColor = $color
+}
 $lblHelpVer.ForeColor = $Theme.Muted
 
 $txtHelp = New-Object System.Windows.Forms.TextBox
 $txtHelp.Multiline = $true; $txtHelp.ReadOnly = $true; $txtHelp.ScrollBars = 'Vertical'
 $txtHelp.BackColor = $Theme.Surface
-$txtHelp.Location = New-Object System.Drawing.Point(12, 70); $txtHelp.Size = New-Object System.Drawing.Size(498, 340)
+$txtHelp.Location = New-Object System.Drawing.Point(12, 96); $txtHelp.Size = New-Object System.Drawing.Size(498, 314)
 $txtHelp.Text = @"
 DỊCH VỤ
   Bật / tắt WSL, PostgreSQL, K3s, Docker, Tailscale. Chuột phải một dòng để Start / Stop / Restart.
@@ -2515,6 +2546,9 @@ TÀI LIỆU
   K3s: cài nhanh https://docs.k3s.io/quick-start · tài liệu https://docs.k3s.io/
   kubectl: https://kubernetes.io/vi/docs/reference/kubectl/cheatsheet/ · k9s: https://k9scli.io/topics/commands/
 
+CẬP NHẬT
+  Panel tự kiểm tra bản mới trên GitHub (lúc mở và 12 giờ / lần). Có bản mới: link dưới cùng cửa sổ → Cài bản mới.
+
 PHÍM TẮT
   F1 Trợ giúp · Ctrl+F tìm app · F5 làm mới danh sách app · Enter mở web app đang chọn · Delete gỡ app
 
@@ -2559,6 +2593,8 @@ if ($Distro) {
     [void]$menu.Items.Add('Mở k9s', $null, { Start-Ubuntu; Open-UbuntuTerminal '-u root -e env KUBECONFIG=/etc/rancher/k3s/k3s.yaml k9s' })
 }
 [void]$menu.Items.Add('-')
+$miTrayUpd = $menu.Items.Add('Cập nhật', $null, { $form.Show(); $form.WindowState = 'Normal'; $form.Activate(); Show-UpdateDialog })
+$miTrayUpd.Available = $false
 [void]$menu.Items.Add("Trợ giúp (v$PanelVersion)", $null, { $form.Show(); $form.WindowState = 'Normal'; $tabs.SelectedTab = $pageHelp; $form.Activate() })
 [void]$menu.Items.Add('Thoát panel', $null, { $script:exiting = $true; $form.Close() })
 $tray.ContextMenuStrip = $menu
@@ -2720,6 +2756,123 @@ function Set-Theme([string]$name) {
     $tabs.Invalidate(); $chart.Invalidate()
 }
 
+# ---------- Cập nhật: so bản đang cài với bản mới nhất trên GitHub ----------
+$script:latestRel = $null
+$script:updNotified = $false
+$script:updChecking = $false
+function Update-UpdateUi {
+    $r = $script:latestRel
+    $new = [bool]($r -and $r.IsNewer)
+    if (-not $r) {
+        Set-UpdLine @(@("Đang dùng $PanelVersion  ·  ", $null), @('Mới nhất trên GitHub', 'releases'), @('  ·  ', $null), @('Kiểm tra lại', 'check')) $Theme.Muted
+    } else {
+        $relText = "$($r.Version)" + $(if ($r.Published) { " ($($r.Published))" } else { '' })
+        $parts = @(@("Đang dùng $PanelVersion  ·  Mới nhất trên GitHub: ", $null), @($relText, 'release'))
+        if ($new) { $parts += , @('  ·  ', $null); $parts += , @('⬆ Cài bản mới', 'install') } else { $parts += , @('  ✓ đang dùng bản mới nhất', $null) }
+        $parts += , @('  ·  ', $null); $parts += , @('Kiểm tra lại', 'check')
+        Set-UpdLine $parts $(if ($new) { $Theme.Warn } else { $Theme.Text })
+    }
+    $lnkUpdate.Visible = $new
+    if ($new) {
+        $lnkUpdate.Text = "⬆ Có bản mới $($r.Version) - bấm để cập nhật"
+        $lnkUpdate.LinkColor = $Theme.Ok; $lnkUpdate.ActiveLinkColor = $Theme.Ok
+        $lnkUpdate.Left = $form.ClientSize.Width - $lnkUpdate.PreferredWidth - 16
+        $statusLbl.Width = [math]::Max(120, $lnkUpdate.Left - $statusLbl.Left - 8)
+        $form.Text = "$AppName  v$PanelVersion  (có bản mới $($r.Version))"
+        $miTrayUpd.Text = "⬆ Cập nhật lên $($r.Version)…"; $miTrayUpd.Available = $true
+        if (-not $script:updNotified) {
+            $script:updNotified = $true
+            $tray.ShowBalloonTip(6000, "$AppName - có bản mới $($r.Version)", "Đang dùng $PanelVersion. Bấm link dưới cùng cửa sổ hoặc tab Trợ giúp để cập nhật.", 'Info')
+        }
+    } else {
+        $statusLbl.Width = $form.ClientSize.Width - $statusLbl.Left - 16
+        $form.Text = "$AppName  v$PanelVersion"
+        $miTrayUpd.Available = $false
+    }
+}
+function Start-UpdateCheck([switch]$Manual) {
+    if ($script:updChecking) { return }
+    $script:updChecking = $true
+    if ($Manual) { Set-Status 'Đang kiểm tra bản mới trên GitHub...'; Set-UpdLine @(, @("Đang dùng $PanelVersion  ·  đang kiểm tra bản mới trên GitHub...", $null)) $Theme.Muted }
+    Start-CoreAsync 'Get-LatestRelease' @{} {
+        param($r, $ctx)
+        $script:updChecking = $false
+        if (-not $r.Ok) {
+            if ($ctx.Manual) {
+                Set-Status "Không kiểm tra được bản mới: $($r.Value)"
+                Set-UpdLine @(@("Đang dùng $PanelVersion  ·  không kết nối được GitHub  ·  ", $null), @('Thử lại', 'check'), @('  ·  ', $null), @('Mở trang GitHub', 'releases')) $Theme.Muted
+            }
+            return
+        }
+        $script:latestRel = $r.Value
+        $script:latestRel.IsNewer = [bool](($v = ConvertTo-PanelVersion $r.Value.Version) -and $v -gt [version]$PanelVersion)
+        Update-UpdateUi
+        if ($ctx.Manual) { Set-Status $(if ($r.Value.IsNewer) { "Có bản mới $($r.Value.Version) (đang dùng $PanelVersion)." } else { "Đang dùng bản mới nhất ($PanelVersion)." }) }
+    } @{ Manual = [bool]$Manual }
+}
+
+function Show-UpdateDialog {
+    $r = $script:latestRel
+    if (-not $r) { Start-UpdateCheck -Manual; return }
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Cập nhật DevOps Panel'; $d.Icon = $AppIcon; $d.Font = $font
+    $d.Size = New-Object System.Drawing.Size(620, 480); $d.StartPosition = 'CenterParent'
+    $d.FormBorderStyle = 'FixedDialog'; $d.MinimizeBox = $false; $d.MaximizeBox = $false
+    $l1 = New-Label $(if ($r.IsNewer) { "Có bản mới: $($r.Version)" } else { "Đang dùng bản mới nhất" }) 16 14 570 $d -Bold
+    $l1.Font = New-Object System.Drawing.Font('Segoe UI', 13, [System.Drawing.FontStyle]::Bold); $l1.Height = 30
+    $l1.ForeColor = if ($r.IsNewer) { $Theme.Ok } else { $Theme.Text }
+    $l2 = New-Label ("Đang dùng: $PanelVersion   →   Mới nhất: $($r.Version)" + $(if ($r.Published) { "  (phát hành $($r.Published))" } else { '' })) 16 48 570 $d
+    $l3 = New-Label "Ghi chú phát hành ($($r.Name)):" 16 78 570 $d
+    $l3.ForeColor = $Theme.Muted
+    $notes = New-Object System.Windows.Forms.TextBox
+    $notes.Multiline = $true; $notes.ReadOnly = $true; $notes.ScrollBars = 'Vertical'; $notes.TabStop = $false
+    $notes.Location = New-Object System.Drawing.Point(16, 102); $notes.Size = New-Object System.Drawing.Size(572, 260)
+    $notes.Text = $(if ($r.Notes.Trim()) { $r.Notes.Trim() -replace "`r?`n", "`r`n" } else { '(Không có ghi chú)' })
+    $d.Controls.Add($notes)
+    $hint = New-Label $(if ($r.SetupUrl) { "Cài bản mới: tải bộ cài ($([math]::Round($r.SetupSize / 1KB)) KB) từ GitHub, panel tự đóng rồi mở lại." } else { 'Bản phát hành này chưa đính kèm DevOpsPanel-Setup.exe - mở trang GitHub để tải.' }) 16 368 572 $d
+    $hint.ForeColor = $Theme.Muted; $hint.Height = 22
+    $bInstall = New-Object System.Windows.Forms.Button; $bInstall.Text = 'Cài bản mới'; $bInstall.Size = New-Object System.Drawing.Size(130, 34); $bInstall.Location = New-Object System.Drawing.Point(16, 396)
+    $bInstall.Enabled = [bool]($r.IsNewer -and $r.SetupUrl)
+    $bInstall.Add_Click({ param($sender, $e) $sender.FindForm().DialogResult = 'Yes' })
+    $bWeb = New-Object System.Windows.Forms.Button; $bWeb.Text = 'Xem trên GitHub'; $bWeb.Size = New-Object System.Drawing.Size(150, 34); $bWeb.Location = New-Object System.Drawing.Point(152, 396)
+    $bWeb.Add_Click({ param($sender, $e) Start-Process $script:latestRel.Url })
+    $bLater = New-Object System.Windows.Forms.Button; $bLater.Text = 'Để sau'; $bLater.Size = New-Object System.Drawing.Size(100, 34); $bLater.Location = New-Object System.Drawing.Point(488, 396); $bLater.DialogResult = 'Cancel'
+    $d.Controls.AddRange(@($bInstall, $bWeb, $bLater)); $d.CancelButton = $bLater
+    Set-ControlTheme $d $Theme $Theme
+    Add-IconsTo $d
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender })
+    if ($d.ShowDialog($form) -eq 'Yes') { Install-PanelUpdate $r }
+}
+
+# Tải bộ cài ở nền rồi chạy; bộ cài tự tắt panel đang chạy, ghi đè và mở lại
+function Install-PanelUpdate($r) {
+    $installed = $PSScriptRoot -like (Join-Path $env:LOCALAPPDATA 'Programs\DevOpsPanel*')
+    if (-not $installed) {
+        $q = "Panel đang chạy từ thư mục mã nguồn:`n$PSScriptRoot`n`nBộ cài sẽ cài bản $($r.Version) vào %LOCALAPPDATA%\Programs\DevOpsPanel (không sửa thư mục mã nguồn). Tiếp tục?"
+        if ([System.Windows.Forms.MessageBox]::Show($q, 'Cập nhật', 'YesNo', 'Question') -ne 'Yes') { return }
+    }
+    Set-Status "Đang tải bộ cài $($r.Version)..."
+    $form.Cursor = 'AppStarting'
+    Start-CoreAsync 'Save-UpdateInstaller $p.Url $p.Ver $p.Size' @{ Url = $r.SetupUrl; Ver = $r.Version; Size = $r.SetupSize } {
+        param($res, $ctx)
+        $form.Cursor = 'Default'
+        if (-not $res.Ok) {
+            Set-Status "Không tải được bộ cài: $($res.Value)"
+            if ([System.Windows.Forms.MessageBox]::Show("Không tải được bộ cài:`n$($res.Value)`n`nMở trang GitHub để tải thủ công?", 'Cập nhật', 'YesNo', 'Warning') -eq 'Yes') { Start-Process $script:latestRel.Url }
+            return
+        }
+        Set-Status "Đã tải bộ cài $($ctx.Ver) - đang chạy..."
+        try {
+            Start-Process -FilePath ([string]$res.Value)
+            $script:exiting = $true; $form.Close()          # bộ cài cũng tự tắt panel trước khi ghi đè
+        } catch { Set-Status "Không chạy được bộ cài: $($_.Exception.Message)" }
+    } @{ Ver = $r.Version }
+}
+Update-UpdateUi      # dòng phiên bản ở tab Trợ giúp trước khi kiểm tra xong
+$updTimer = New-Object System.Windows.Forms.Timer
+$updTimer.Interval = 12 * 3600 * 1000          # 12 giờ kiểm tra lại 1 lần
+$updTimer.Add_Tick({ Start-UpdateCheck })
+
 $form.Add_FormClosing({
     param($s, $e)
     if (-not $script:exiting -and $e.CloseReason -eq 'UserClosing') {
@@ -2752,6 +2905,8 @@ $form.Add_Shown({
         Set-Status 'Ubuntu đã được tự khởi động.'
     } else { Set-Status 'Sẵn sàng.' }
     $timer.Start()
+    $firstUpd = New-Object System.Windows.Forms.Timer; $firstUpd.Interval = 4000
+    $firstUpd.Add_Tick({ param($sender, $e) $sender.Stop(); Start-UpdateCheck; $updTimer.Start() }); $firstUpd.Start()
     $healthTimer.Start()
 })
 
@@ -2771,6 +2926,8 @@ $flK3s.Anchor = 'Top, Right'
 foreach ($l in @($lnkWsl1, $lnkWsl2)) { $l.Anchor = 'Top, Left' }
 $lblSearch.Anchor = 'Top, Right'; $txtSearch.Anchor = 'Top, Right'
 foreach ($c in @($lblHelpTitle, $lblHelpVer)) { $c.Anchor = 'Top, Left, Right' }
+$lnkUpdate.Anchor = 'Bottom, Right'
+$lnkUpd.Anchor = 'Top, Left, Right'
 $txtHelp.Anchor = 'Top, Bottom, Left, Right'
 foreach ($c in $pageHelp.Controls) { if ($c -is [System.Windows.Forms.Button] -or $c -eq $lnkEmail -or $c -eq $lblContact) { $c.Anchor = 'Bottom, Left' } }
 $lvCpu.Anchor = 'Top, Bottom, Left'; $lvRam.Anchor = 'Top, Bottom, Left'

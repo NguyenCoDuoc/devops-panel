@@ -2,8 +2,9 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.1'
+$PanelVersion = '1.0.2'
 $SupportEmail = 'coduoc2502@gmail.com'
+$UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
 # ---------- Cấu hình theo người dùng ----------
 # Nằm ở %APPDATA% (không phải thư mục cài) để cài lại / nâng cấp bản mới không mất cấu hình, danh mục app, log.
@@ -1190,6 +1191,42 @@ function Switch-RepoBranch([string]$root, [string]$name, [bool]$isRemote) {
     $r = Invoke-Git $root @('switch', $target) 60000
     if ($r.Code -ne 0) { throw $r.Err }
     "Đã chuyển sang $target"
+}
+
+# ---------- Kiểm tra / tải bản mới (GitHub Releases) ----------
+function ConvertTo-PanelVersion([string]$tag) {
+    $v = $null
+    if ([version]::TryParse(($tag.Trim() -replace '^[vV]', ''), [ref]$v)) { $v } else { $null }
+}
+# Bản phát hành mới nhất (không tính bản nháp / pre-release). API GitHub không cần đăng nhập: 60 lần/giờ mỗi IP.
+function Get-LatestRelease {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $r = Invoke-RestMethod "https://api.github.com/repos/$UpdateRepo/releases/latest" -UseBasicParsing -TimeoutSec 15 `
+        -Headers @{ 'User-Agent' = "DevOpsPanel/$PanelVersion"; 'Accept' = 'application/vnd.github+json' }
+    $asset = @($r.assets | Where-Object { $_.name -eq 'DevOpsPanel-Setup.exe' }) | Select-Object -First 1
+    $ver = ConvertTo-PanelVersion $r.tag_name
+    [pscustomobject]@{
+        Tag = $r.tag_name; Version = [string]$ver; Name = $r.name; Notes = [string]$r.body; Url = $r.html_url
+        Published = $(if ($r.published_at) { ([datetime]$r.published_at).ToLocalTime().ToString('dd/MM/yyyy') } else { '' })
+        SetupUrl = $asset.browser_download_url; SetupSize = [long]$asset.size
+        IsNewer = [bool]($ver -and $ver -gt [version]$PanelVersion)
+    }
+}
+# Tải bộ cài của bản mới về thư mục Temp, kiểm tra đúng file exe rồi trả đường dẫn
+function Save-UpdateInstaller([string]$url, [string]$version, [long]$size = 0) {
+    if ($url -notmatch '^https://(github\.com|objects\.githubusercontent\.com)/') { throw 'Link tải bộ cài không hợp lệ' }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $dest = Join-Path $env:TEMP "DevOpsPanel-Setup-$version.exe"
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers['User-Agent'] = "DevOpsPanel/$PanelVersion"
+    try { $wc.DownloadFile($url, $dest) } finally { $wc.Dispose() }
+    $fi = Get-Item $dest
+    $head = [IO.File]::ReadAllBytes($dest)[0..1]
+    if ($fi.Length -lt 10KB -or ($size -and $fi.Length -ne $size) -or $head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+        Remove-Item $dest -Force -ErrorAction SilentlyContinue
+        throw 'File tải về không đúng bộ cài (bị lỗi khi tải hoặc bị chặn bởi proxy)'
+    }
+    $dest
 }
 
 function Invoke-AppGit([string]$id, [string]$action, [string]$branch = '') {
