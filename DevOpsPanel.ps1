@@ -342,9 +342,9 @@ $list.ContextMenuStrip = $svcMenu
 
 # Ubuntu
 $gUbuntu = New-Group $(if ($Distro) { "WSL: $Distro" } else { 'WSL (máy này chưa cài distro Ubuntu)' }) 278 70
-New-Button 'Khởi động' 12 26 120 $gUbuntu { Invoke-Busy "Đang khởi động $Distro..." { Start-Ubuntu }; Set-Status "$Distro đang chạy." } | Out-Null
-New-Button 'Tắt' 140 26 100 $gUbuntu { Invoke-Busy "Đang tắt $Distro..." { Stop-Ubuntu }; Set-Status "Đã tắt $Distro." } | Out-Null
-New-Button 'Mở terminal' 248 26 140 $gUbuntu { Open-UbuntuTerminal } | Out-Null
+New-Button 'Khởi động' 12 26 110 $gUbuntu { Invoke-Busy "Đang khởi động $Distro..." { Start-Ubuntu }; Set-Status "$Distro đang chạy." } | Out-Null
+New-Button 'Tắt' 128 26 84 $gUbuntu { Invoke-Busy "Đang tắt $Distro..." { Stop-Ubuntu }; Set-Status "Đã tắt $Distro." } | Out-Null
+New-Button 'Mở terminal' 218 26 128 $gUbuntu { Open-UbuntuTerminal } | Out-Null
 # Link tài liệu (mở trình duyệt)
 function New-DocLink([string]$text, [string]$url, $parent, [int]$x, [int]$y) {
     $l = New-Object System.Windows.Forms.LinkLabel
@@ -356,8 +356,8 @@ function New-DocLink([string]$text, [string]$url, $parent, [int]$x, [int]$y) {
     $l
 }
 $tipDoc = New-Object System.Windows.Forms.ToolTip
-$lnkWsl1 = New-DocLink 'Hướng dẫn cài WSL' 'https://learn.microsoft.com/vi-vn/windows/wsl/install' $gUbuntu 398 22
-$lnkWsl2 = New-DocLink 'Lệnh WSL cơ bản' 'https://learn.microsoft.com/vi-vn/windows/wsl/basic-commands' $gUbuntu 398 42
+$lnkWsl1 = New-DocLink 'Hướng dẫn cài WSL' 'https://learn.microsoft.com/vi-vn/windows/wsl/install' $gUbuntu 360 24
+$lnkWsl2 = New-DocLink 'Lệnh WSL cơ bản' 'https://learn.microsoft.com/vi-vn/windows/wsl/basic-commands' $gUbuntu 360 44
 if (-not $Distro) { foreach ($c in $gUbuntu.Controls) { if ($c -isnot [System.Windows.Forms.LinkLabel]) { $c.Enabled = $false } } }      # chưa cài WSL: vẫn bấm được link hướng dẫn cài
 
 # PostgreSQL trong WSL (bật bằng port ở tab Cài đặt)
@@ -2519,6 +2519,8 @@ foreach ($m in @($menu, $profMenu)) { Add-MenuIcons $m.Items }
 $xs = Set-ButtonRow $pageSettings 456 6 8           # Lưu và mở lại / Chẩn đoán
 $lblDataDir.Left = $xs + 4; $lblDataDir.Width = [math]::Max(80, 516 - $xs - 10)      # bề rộng thiết kế; neo phải sẽ giãn theo cửa sổ
 [void](Set-ButtonRow $pageHelp 448)
+$xw = Set-ButtonRow $gUbuntu 26 12 6                # nút WSL có icon rộng ra -> link hướng dẫn đặt ngay sau nút cuối
+foreach ($l in @($lnkWsl1, $lnkWsl2)) { $l.Left = $xw + 8 }
 $x = 12
 foreach ($c in @($gGit.Controls | Where-Object { ($_ -is [System.Windows.Forms.Button] -or $_ -eq $cbBranch) -and $_.Top -ge 90 } | Sort-Object Left)) {
     $c.Left = $x; $c.Top = 94; $x += $c.Width + 6
@@ -2711,7 +2713,7 @@ $list.Anchor = 'Top, Left, Right'
 foreach ($m in $meters.Values) { $m.Bar.Anchor = 'Top, Left, Right'; $m.Label.Anchor = 'Top, Right' }
 foreach ($c in @($lblInfo, $lblWarn, $chart, $lblK3s, $lblApps)) { $c.Anchor = 'Top, Left, Right' }
 $flK3s.Anchor = 'Top, Right'
-foreach ($l in @($lnkWsl1, $lnkWsl2)) { $l.Anchor = 'Top, Right' }
+foreach ($l in @($lnkWsl1, $lnkWsl2)) { $l.Anchor = 'Top, Left' }
 $lblSearch.Anchor = 'Top, Right'; $txtSearch.Anchor = 'Top, Right'
 foreach ($c in @($lblHelpTitle, $lblHelpVer)) { $c.Anchor = 'Top, Left, Right' }
 $txtHelp.Anchor = 'Top, Bottom, Left, Right'
