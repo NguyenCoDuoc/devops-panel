@@ -426,6 +426,7 @@ function Update-Status {
         if ($ok) { $sub.Text = '● Đang chạy'; $sub.ForeColor = $Theme.Ok }
         else     { $sub.Text = '○ Đã dừng';  $sub.ForeColor = $Theme.Err }
     }
+    if ($script:lvSort) { Sort-ListView $list }
 }
 
 # ---------- Tab Sức khỏe ----------
@@ -528,6 +529,7 @@ function Fill-TopList($lv, $rows) {
         [void]$lv.Items.Add($it)
     }
     $lv.EndUpdate()
+    if ($script:lvSort) { Sort-ListView $lv }
 }
 
 # Thu thập dữ liệu ở runspace nền để giao diện không bị đơ (mỗi lần đo ~1.5s)
@@ -714,6 +716,7 @@ function Update-K3s {
         if ($p.Name -eq $sel) { $it.Selected = $true }
     }
     $lvPods.EndUpdate()
+    Sort-ListView $lvPods
     Set-Status ("K3s cập nhật lúc " + (Get-Date).ToString('HH:mm:ss'))
 }
 
@@ -1520,6 +1523,7 @@ function Render-Repos {
         if ($sel -contains $r.Root) { $it.Selected = $true }
     }
     $lvRepos.EndUpdate()
+    Sort-ListView $lvRepos
     if ($script:gitWantApp) {
         foreach ($it in $lvRepos.Items) { $it.Selected = (@($it.Tag.Apps -split ', ') -contains $script:gitWantApp) }
         $first = @($lvRepos.SelectedItems)[0]; if ($first) { $first.EnsureVisible(); $first.Focused = $true }
@@ -2270,6 +2274,56 @@ function Invoke-CommitNow($cs, [bool]$push) {
         if ($cs.Browser -and -not $cs.Browser.Form.IsDisposed) { GitB-Refresh $cs.Browser }
     } @{ Cs = $cs }
 }
+
+# ---------- Sắp xếp cột dùng chung cho các bảng (Dịch vụ, Sức khỏe, K3s, Git) ----------
+# Bấm tiêu đề cột: tăng dần, bấm lại: giảm dần. Số (port, %, MB/GB, ms, tuổi 5d/3h) so theo giá trị; ô trống luôn xuống cuối.
+# Bảng tự làm mới thì gọi lại Sort-ListView để giữ thứ tự đã chọn.
+$script:lvSort = @{}
+function Get-CellSortKey([string]$t) {
+    $t = ($t -replace '^[^\p{L}\p{N}]+', '').Trim()           # bỏ ký hiệu đầu dòng (● ○ ⚠ ✓)
+    if (-not $t) { return @(2, 0, '') }
+    if ($t -match '^(-?[\d]+(?:[.,]\d+)?)\s*(%|ms|KB|MB|GB)?$') {
+        $n = [double]($Matches[1] -replace ',', '.')
+        switch ($Matches[2]) { 'GB' { $n *= 1024 } 'KB' { $n /= 1024 } }
+        return @(0, $n, '')
+    }
+    if ($t -match '^(\d+)([smhd])$') { return @(0, [double]$Matches[1] * @{ s = 1; m = 60; h = 3600; d = 86400 }[$Matches[2]], '') }
+    if ($t -match '^(\d+)/(\d+)$') { return @(0, [double]$Matches[1] + [double]$Matches[2] / 1000, '') }      # Ready 1/2
+    @(1, 0, $t.ToLowerInvariant())
+}
+function Sort-ListView($lv) {
+    $st = $script:lvSort[$lv]
+    if (-not $st -or $st.Col -lt 0 -or $st.Col -ge $lv.Columns.Count -or $lv.Items.Count -lt 2) { return }
+    $sel = @($lv.SelectedItems); $foc = $lv.FocusedItem
+    $col = $st.Col
+    $rows = foreach ($it in $lv.Items) {
+        $txt = if ($col -lt $it.SubItems.Count) { $it.SubItems[$col].Text } else { '' }
+        $k = Get-CellSortKey $txt
+        [pscustomobject]@{ It = $it; R = $k[0]; N = $k[1]; T = $k[2]; Name = $it.Text }
+    }
+    $sorted = @($rows | Sort-Object @{ Expression = 'R' }, @{ Expression = 'N'; Descending = $st.Desc }, @{ Expression = 'T'; Descending = $st.Desc }, @{ Expression = 'Name' })
+    $lv.BeginUpdate()
+    $lv.Items.Clear()
+    $lv.Items.AddRange([System.Windows.Forms.ListViewItem[]]@($sorted | ForEach-Object It))
+    foreach ($it in $sel) { $it.Selected = $true }
+    if ($foc) { $foc.Focused = $true }
+    $lv.EndUpdate()
+}
+function Enable-ColumnSort($lv) {
+    $lv.HeaderStyle = 'Clickable'
+    $script:lvSort[$lv] = @{ Col = -1; Desc = $false; Titles = @($lv.Columns | ForEach-Object Text) }
+    $lv.Add_ColumnClick({
+        param($sender, $e)
+        $st = $script:lvSort[$sender]
+        if ($st.Col -eq $e.Column) { $st.Desc = -not $st.Desc } else { $st.Col = $e.Column; $st.Desc = $false }
+        for ($i = 0; $i -lt $sender.Columns.Count -and $i -lt $st.Titles.Count; $i++) {
+            $sender.Columns[$i].Text = $st.Titles[$i] + $(if ($i -eq $st.Col) { if ($st.Desc) { ' ▼' } else { ' ▲' } } else { '' })
+        }
+        Sort-ListView $sender
+    })
+}
+
+foreach ($lv in @($list, $lvPods, $lvCpu, $lvRam, $lvRepos)) { Enable-ColumnSort $lv }
 
 # ---------- Tab Cài đặt ----------
 function Invoke-ProjectScan {
