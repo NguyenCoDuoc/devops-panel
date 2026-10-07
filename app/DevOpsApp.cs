@@ -13,8 +13,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("DevOps Panel")]
 [assembly: AssemblyCompany("DevOps Panel")]
 [assembly: AssemblyDescription("Bảng điều khiển Ubuntu (WSL), PostgreSQL, Docker, sức khỏe máy")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 
 static class Program
 {
