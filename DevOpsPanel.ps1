@@ -994,7 +994,7 @@ function Build-ProfileMenu($items, $owner) {
     $profiles = @((Get-AppsConfig).Profiles)
     foreach ($p in $profiles) {
         $ids = @($p.ids); $name = [string]$p.name
-        $apps = Get-AppsByIds $ids
+        $apps = @(Get-AppsByIds $ids)
         $run = @($apps | Where-Object Running).Count
         $mi = New-ThemedMenuItem "$name   ($run/$($apps.Count) đang chạy)" $null
         $mi.DropDown.Renderer = $owner.Renderer; $mi.DropDown.BackColor = $Theme.Surface
@@ -1372,7 +1372,7 @@ function Update-Apps {
     Watch-AppsCrash $prev $script:appsData
     Resolve-AppsPending
     if ($script:restartQueue.Count -and -not $script:appsBatchBusy) {
-        $q = Get-AppsByIds @($script:restartQueue); $script:restartQueue.Clear()
+        $q = @(Get-AppsByIds @($script:restartQueue)); $script:restartQueue.Clear()      # @(): 1 app sập vẫn là mảng
         if ($q.Count) { Invoke-AppsBatch 'start' $q }
     }
     if ($form.Visible -and $tabs.SelectedTab -eq $pageApps) { Render-Apps }
@@ -1496,6 +1496,7 @@ foreach ($col in @(@('Repo', 120), @('Nhánh', 170), @('↓', 34), @('↑', 34),
 $pageGit.Controls.Add($lvRepos)
 $script:repos = @(); $script:reposLoaded = $false; $script:reposBusy = $false; $script:gitWantApp = $null; $script:logFor = $null; $script:logText = ''
 
+# Lưu ý PowerShell 5.1: hàm trả 1 phần tử thì nơi gọi nhận object đơn (không có .Count) -> luôn gọi dạng @(Get-SelectedRepos)
 function Get-SelectedRepos([switch]$AllIfNone) {
     $s = @($lvRepos.SelectedItems | ForEach-Object { $_.Tag } | Where-Object IsRepo)
     if (-not $s.Count -and $AllIfNone) { $s = @($script:repos | Where-Object IsRepo) }
@@ -1566,8 +1567,8 @@ function Invoke-ReposAction([string]$code, [hashtable]$params, [string]$title, $
 $btnY = 236
 $gitBtns = @(
     @('Làm mới', 72, { Load-Repos }),
-    @('Fetch', 60, { $s = Get-SelectedRepos -AllIfNone; if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots fetch' @{ Roots = @($s.Root) } "Fetch $($s.Count) repo" } }),
-    @('Pull', 54, { $s = Get-SelectedRepos -AllIfNone; if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots pull' @{ Roots = @($s.Root) } "Pull (fast-forward) $($s.Count) repo" } }),
+    @('Fetch', 60, { $s = @(Get-SelectedRepos -AllIfNone); if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots fetch' @{ Roots = @($s.Root) } "Fetch $($s.Count) repo" } }),
+    @('Pull', 54, { $s = @(Get-SelectedRepos -AllIfNone); if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots pull' @{ Roots = @($s.Root) } "Pull (fast-forward) $($s.Count) repo" } }),
     @('Tạo nhánh…', 96, { Show-NewBranchDialog }),
     @('Commit…', 78, { $r = @(Get-SelectedRepos)[0]; if ($r) { Show-CommitDialog $r.Root } else { Set-Status 'Chọn một repo.' } }),
     @('Push + MR', 88, { Invoke-PushMr })

@@ -2,12 +2,12 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.0'
+$PanelVersion = '1.0.1'
 $SupportEmail = 'coduoc2502@gmail.com'
 
 # ---------- Cấu hình theo người dùng ----------
 # Nằm ở %APPDATA% (không phải thư mục cài) để cài lại / nâng cấp bản mới không mất cấu hình, danh mục app, log.
-$DataDir    = Join-Path $env:APPDATA 'DevOpsPanel'
+$DataDir    = if ($env:DEVOPS_PANEL_DATA) { $env:DEVOPS_PANEL_DATA } else { Join-Path $env:APPDATA 'DevOpsPanel' }     # biến môi trường: chạy thử với dữ liệu riêng
 $ConfigFile = Join-Path $DataDir 'config.json'
 New-Item -ItemType Directory -Force $DataDir | Out-Null
 
@@ -1006,6 +1006,20 @@ function Get-AllReposGitInfo {
     }
 }
 
+# Lỗi git dễ hiểu: bỏ các dòng "hint:", diễn giải lỗi hay gặp
+function Format-GitError([string]$root, [string]$msg) {
+    if ($msg -match 'Not possible to fast-forward|Diverging branches|have diverged') {
+        $c = (Invoke-Git $root @('rev-list', '--left-right', '--count', 'HEAD...@{u}')).Out -split '\s+'
+        $ahead = if ($c.Count -ge 2) { $c[0] } else { '?' }; $behind = if ($c.Count -ge 2) { $c[1] } else { '?' }
+        return "nhánh ở máy và remote đã lệch nhau (máy có $ahead commit chưa push, remote có $behind commit mới) - panel chỉ pull fast-forward, cần merge hoặc rebase bằng tay"
+    }
+    if ($msg -match 'would be overwritten by merge') { return 'file đang sửa ở máy trùng với file remote vừa đổi - commit hoặc stash trước rồi pull' }
+    if ($msg -match 'no tracking information|no upstream') { return 'nhánh chưa có upstream trên remote - dùng Push + MR để đẩy lên lần đầu' }
+    if ($msg -match 'Authentication failed|could not read Username|terminal prompts disabled') { return 'git cần đăng nhập - mở terminal tại repo chạy git fetch một lần để lưu tài khoản' }
+    if ($msg -match 'Could not resolve host|unable to access') { return 'không kết nối được tới git server (mạng / VPN?)' }
+    (($msg -split "`n" | Where-Object { $_ -notmatch '^\s*hint:' -and $_.Trim() }) -join ' ') -replace '\s+', ' '
+}
+
 function Invoke-ReposGit([string[]]$roots, [string]$action) {
     $out = foreach ($root in $roots) {
         $r = switch ($action) {
@@ -1015,7 +1029,7 @@ function Invoke-ReposGit([string[]]$roots, [string]$action) {
         }
         $msg = ((@($r.Out, $r.Err) | Where-Object { $_ }) -join ' ') -replace '\s+', ' '
         if ($r.Code -eq 0) { "✓ $(Split-Path $root -Leaf): $(if ($msg) { $msg } else { "$action xong" })" }
-        else { "✗ $(Split-Path $root -Leaf): $msg" }
+        else { "✗ $(Split-Path $root -Leaf): $(Format-GitError $root ((@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"))" }
     }
     , @($out)
 }
@@ -1061,7 +1075,7 @@ function Push-RepoBranchForMr([string]$root) {
     $r = Invoke-Git $root @('push', '-u', 'origin', $branch) 180000
     if ($r.Code -ne 0) { throw "git push lỗi: $($r.Err)" }
     $web = Get-RepoWebUrl $root
-    $url = if ($web) { "$web/-/merge_requests/new?merge_request%5Bsource_branch%5D=$([Uri]::EscapeDataString($branch))&merge_request%5Btarget_branch%5D=$target" } else { $null }
+    $url = if ($web -match '^https?://') { "$web/-/merge_requests/new?merge_request%5Bsource_branch%5D=$([Uri]::EscapeDataString($branch))&merge_request%5Btarget_branch%5D=$target" } else { $null }
     [pscustomobject]@{ Msg = "Đã push $branch -> mở Merge Request vào $target" + $(if ($branch -like 'hotfix/*') { ' (nhớ cherry-pick sang main sau khi merge)' } else { '' }); Url = $url }
 }
 
@@ -1192,7 +1206,7 @@ function Invoke-AppGit([string]$id, [string]$action, [string]$branch = '') {
         default { throw "Lệnh git không hỗ trợ: $action" }
     }
     $msg = (@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"
-    if ($r.Code -ne 0) { throw ("git $action lỗi: " + $msg) }
+    if ($r.Code -ne 0) { throw ("git $action lỗi: " + (Format-GitError $dir $msg)) }
     if (-not $msg) { $msg = "git $action xong" }
     $msg
 }
