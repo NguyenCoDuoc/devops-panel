@@ -29,6 +29,8 @@ function Get-PanelConfig {
         aiMode          = 1           # 0 = chỉ đọc, 1 = cho sửa file, 2 = toàn quyền
         aiModel         = ''          # rỗng = model mặc định của CLI
         aiDirs          = @()         # thư mục làm việc dùng gần đây
+        navLayout       = 'top'       # menu tab: top = trên dải tiêu đề, side = thanh bên trái
+        navCollapsed    = $false      # thanh bên trái thu gọn chỉ còn icon
     }
     if (Test-Path $ConfigFile) {
         $j = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1137,6 +1139,19 @@ function Get-RepoLogGraph([string]$root, [int]$count = 200, [bool]$all = $true) 
     $r = Invoke-Git $root $args2 60000
     if ($r.Code -ne 0) { throw $r.Err }
     $r.Out
+}
+
+# Tóm tắt thư mục làm việc cho tab AI Code: nhánh, số dòng thêm / bớt so với HEAD, số file mới chưa track
+function Get-RepoWorkSummary([string]$dir) {
+    $b = Invoke-Git $dir @('rev-parse', '--abbrev-ref', 'HEAD') 10000
+    if ($b.Code -ne 0) { return [pscustomobject]@{ Repo = $false } }
+    $st = (Invoke-Git $dir @('diff', '--shortstat', 'HEAD') 20000).Out
+    $new = @((Invoke-Git $dir @('ls-files', '--others', '--exclude-standard') 20000).Out -split "`n" | Where-Object { $_ }).Count
+    [pscustomobject]@{
+        Repo = $true; Branch = $b.Out.Trim(); New = $new
+        Add = $(if ($st -match '(\d+) insertion') { [int]$Matches[1] } else { 0 })
+        Del = $(if ($st -match '(\d+) deletion') { [int]$Matches[1] } else { 0 })
+    }
 }
 
 # ---------- Cửa sổ Git kiểu Git Extensions: nhánh, lịch sử commit, diff, stage / commit ----------
