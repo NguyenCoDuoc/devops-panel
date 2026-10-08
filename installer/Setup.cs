@@ -17,13 +17,13 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("DevOps Panel Setup")]
 [assembly: AssemblyProduct("DevOps Panel")]
 [assembly: AssemblyDescription("Bộ cài DevOps Panel")]
-[assembly: AssemblyVersion("1.0.3.0")]
-[assembly: AssemblyFileVersion("1.0.3.0")]
+[assembly: AssemblyVersion("1.0.4.0")]
+[assembly: AssemblyFileVersion("1.0.4.0")]
 
 static class Setup
 {
     const string ProductId = "DevOpsPanel";
-    const string Version = "1.0.3";
+    const string Version = "1.0.4";
     const string ExeName = "DevOpsPanel.exe";
     const string SupportEmail = "coduoc2502@gmail.com";
 

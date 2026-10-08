@@ -835,10 +835,25 @@ foreach ($d in @(@('k9s', 'https://k9scli.io/topics/commands/'), @('kubectl', 'h
     $l = New-DocLink $d[0] $d[1] $flK3s 0 0
     $l.Margin = New-Object System.Windows.Forms.Padding(8, 3, 0, 0)
 }
+# Dòng mạng: IP WSL hiện tại / IP k3s đang giữ / ingress - đổi Wi-Fi làm hai IP lệch nhau thì ingress chết
+$lblK3sNet = New-Label '' 12 44 370 $pageK3s
+$lblK3sNet.AutoEllipsis = $true
+$btnK3sFix = New-Button 'Sửa mạng K3s' 390 38 120 $pageK3s {
+    $ok = [System.Windows.Forms.MessageBox]::Show("Khởi động lại k3s để nhận IP mới rồi tạo lại pod ingress?`n`nCác app trong k3s sẽ gián đoạn khoảng 30 giây.", 'K3s', 'YesNo', 'Question')
+    if ($ok -ne 'Yes') { return }
+    $btnK3sFix.Enabled = $false
+    Set-Status 'Đang khởi động lại k3s và ingress (khoảng 30 giây)...'
+    Start-CoreAsync 'Repair-K3sNetwork' @{} {
+        param($r)
+        $btnK3sFix.Enabled = $true
+        Set-Status $(if ($r.Ok) { 'Đã khởi động lại k3s và ingress. ' + ([string]$r.Value -replace '\s+', ' ') } else { "Lỗi sửa mạng K3s: $($r.Value)" })
+        $k3sSync.Kick = $true
+    }
+}
 $lvPods = New-Object System.Windows.Forms.ListView
 $lvPods.View = 'Details'; $lvPods.FullRowSelect = $true; $lvPods.MultiSelect = $false; $lvPods.HideSelection = $false
-$lvPods.Location = New-Object System.Drawing.Point(12, 40)
-$lvPods.Size = New-Object System.Drawing.Size(498, 380)
+$lvPods.Location = New-Object System.Drawing.Point(12, 74)
+$lvPods.Size = New-Object System.Drawing.Size(498, 346)
 foreach ($col in @(@('Namespace', 95), @('Pod', 170), @('Trạng thái', 105), @('Ready', 45), @('Restart', 50), @('Tuổi', 40))) {
     [void]$lvPods.Columns.Add($col[0], $col[1])
 }
@@ -924,11 +939,21 @@ function Update-K3s {
     if (-not $k.Running) {
         $lblK3s.Text = "K3s không chạy: $($k.Reason) (bật ở tab Dịch vụ, chưa cài thì xem link Cài K3s)"
         $lblK3s.ForeColor = $Theme.Err
+        $lblK3sNet.Text = ''
         $lvPods.Items.Clear(); return
     }
     $node = $k.Nodes | Select-Object -First 1
     $lblK3s.Text = "Node $($node.Name): $($node.Status) · $($node.Version) · Pod OK $($k.Healthy)/$($k.Total)" + $(if ($k.Unhealthy) { " · $($k.Unhealthy) pod lỗi" } else { '' })
     $lblK3s.ForeColor = if ($k.Unhealthy) { $Theme.Err } else { $Theme.Ok }
+
+    $n = $k.Network; $ing = $n.Ingress
+    $ingText = if (-not $ing) { 'không có ingress' }
+               else { "ingress $($ing.Status)" + $(if ($ing.Port) { " · cổng $($ing.Port) " + $(if ($ing.Open) { 'mở' } else { 'ĐÓNG' }) } else { '' }) }
+    $bad = $n.Mismatch -or ($ing -and $ing.Port -and -not $ing.Open)
+    $lblK3sNet.Text = "IP WSL $(if ($n.WslIp) { $n.WslIp } else { '?' }) · IP k3s $(if ($n.NodeIp) { $n.NodeIp } else { '?' })" +
+        $(if ($n.Mismatch) { ' (LỆCH - đã đổi mạng)' } else { '' }) + " · $ingText"
+    $lblK3sNet.ForeColor = if ($bad) { $Theme.Err } else { $Theme.Muted }
+    $tipDoc.SetToolTip($lblK3sNet, $(if ($bad) { "Đổi Wi-Fi / khởi động lại máy làm IP đổi nhưng k3s vẫn giữ IP cũ -> ingress khởi động lại liên tục, app gọi vào cổng $($ing.Port) bị từ chối. Bấm 'Sửa mạng K3s'." } else { 'IP WSL và IP k3s khớp nhau.' }))
 
     $sel = if ($lvPods.SelectedItems.Count) { $lvPods.SelectedItems[0].Tag.Name } else { $null }
     $lvPods.BeginUpdate(); $lvPods.Items.Clear()
@@ -1918,7 +1943,7 @@ QUY TRÌNH GIT-FLOW SUNHOUSE (chỉ có 2 nhánh dài hạn: main và production
 
 $(if ($carry) { 'Các file đang sửa (chưa commit) sẽ được MANG SANG nhánh mới.' } else { 'Repo phải sạch (không có file chưa commit).' }) Nhánh mới chỉ tạo ở máy, chưa push.
 Repo: $((@($s.Name)) -join ', ')
-"@
+"@ -replace '\r?\n', "`r`n"
     $dlg.Controls.Add($note)
     $btnOk = New-Object System.Windows.Forms.Button; $btnOk.Text = 'Tạo nhánh'; $btnOk.DialogResult = 'OK'
     $btnOk.Location = New-Object System.Drawing.Point(400, 420); $btnOk.Size = New-Object System.Drawing.Size(110, 32)
@@ -2713,11 +2738,13 @@ function Set-UpdLine([object[]]$parts, $color) {
 }
 $lblHelpVer.ForeColor = $Theme.Muted
 
-$txtHelp = New-Object System.Windows.Forms.TextBox
-$txtHelp.Multiline = $true; $txtHelp.ReadOnly = $true; $txtHelp.ScrollBars = 'Vertical'
+# RichTextBox thay TextBox: dòng dài tự cuộn nhưng vẫn thẳng hàng với chữ phía trên (hanging indent), link bấm được
+$txtHelp = New-Object System.Windows.Forms.RichTextBox
+$txtHelp.ReadOnly = $true; $txtHelp.ScrollBars = 'Vertical'; $txtHelp.DetectUrls = $true
 $txtHelp.BackColor = $Theme.Surface
 $txtHelp.Location = New-Object System.Drawing.Point(12, 96); $txtHelp.Size = New-Object System.Drawing.Size(498, 314)
-$txtHelp.Text = @"
+$txtHelp.Add_LinkClicked({ param($sender, $e) Start-Process $e.LinkText })
+$HelpText = @"
 DỊCH VỤ
   Bật / tắt WSL, PostgreSQL, K3s, Docker, Tailscale. Chuột phải một dòng để Start / Stop / Restart.
   Nhóm PostgreSQL trong WSL thu gọn sẵn - bấm "▸ PostgreSQL…" để mở.
@@ -2758,6 +2785,8 @@ SỨC KHỎE
 
 K3S
   Danh sách pod; double-click hoặc chuột phải để xem log, describe, restart pod; mở k9s.
+  Dòng Mạng: IP WSL hiện tại, IP k3s đang giữ, ingress và cổng của nó. Đổi Wi-Fi / khởi động lại máy làm IP đổi
+    nhưng k3s vẫn giữ IP cũ → ingress chết, app gọi vào báo "actively refused". Dòng chuyển đỏ → bấm "Sửa mạng K3s".
 
 CÀI ĐẶT
   Tên hiển thị, giao diện sáng / tối, distro WSL, port PostgreSQL, thư mục gốc để quét project.
@@ -2781,9 +2810,42 @@ KHAY HỆ THỐNG
 DỮ LIỆU
   $DataDir
 "@
+# Mỗi dòng là 1 đoạn: dấu cách đầu dòng -> SelectionIndent; dòng "• " cuộn xuống thẳng hàng sau dấu •;
+# dòng tiếp nối (thụt sâu hơn dòng • phía trên) thẳng hàng với chữ của dòng • đó; tiêu đề viết hoa in đậm
+function Show-HelpText {
+    $f = $txtHelp.Font
+    $nf = [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $sp = ([System.Windows.Forms.TextRenderer]::MeasureText('a        a', $f, [System.Drawing.Size]::Empty, $nf).Width -
+           [System.Windows.Forms.TextRenderer]::MeasureText('aa', $f, [System.Drawing.Size]::Empty, $nf).Width) / 8
+    $bulletW = $null   # bề rộng "• " đo ngay trong RichTextBox (TextRenderer đo khác cách RichTextBox vẽ)
+    $bold = New-Object System.Drawing.Font($f, [System.Drawing.FontStyle]::Bold)
+    $txtHelp.Clear()
+    $prev = $null      # dòng • gần nhất: @{ Lvl; TextAt }
+    foreach ($line in ($HelpText -split '\r?\n')) {
+        $m = [regex]::Match($line, '^( *)(• )?(.*)$')
+        $lvl = $m.Groups[1].Length; $isBullet = $m.Groups[2].Success; $body = $m.Groups[3].Value
+        $indent = [int]($lvl * $sp)
+        if (-not $body -or $isBullet) { $prev = $null }
+        elseif ($prev -and $lvl -gt $prev.Lvl) { $indent = $prev.TextAt }
+        else { $prev = $null }
+        $start = $txtHelp.TextLength
+        $txtHelp.AppendText($m.Groups[2].Value + $body + "`n")
+        $txtHelp.Select($start, $txtHelp.TextLength - $start)
+        $txtHelp.SelectionFont = if ($lvl -eq 0 -and $body -and $body -ceq $body.ToUpper()) { $bold } else { $f }
+        $txtHelp.SelectionIndent = $indent
+        $txtHelp.SelectionHangingIndent = 0
+        if ($isBullet) {
+            if ($null -eq $bulletW) { $bulletW = $txtHelp.GetPositionFromCharIndex($start + 2).X - $txtHelp.GetPositionFromCharIndex($start).X }
+            $txtHelp.SelectionHangingIndent = $bulletW
+            $prev = @{ Lvl = $lvl; TextAt = $indent + $bulletW }
+        }
+    }
+    $txtHelp.Select(0, 0)
+}
 $txtHelp.TabStop = $false
 $pageHelp.Controls.Add($txtHelp)
-$pageHelp.Add_Enter({ $txtHelp.Select(0, 0) })     # TextBox nhận focus thì tự bôi đen toàn bộ - bỏ chọn
+Show-HelpText      # sau khi gắn vào tab mới có font Segoe UI của form để đo
+$pageHelp.Add_Enter({ $txtHelp.Select(0, 0) })     # ô chữ nhận focus thì có thể bôi đen - bỏ chọn
 
 $lblContact = New-Label 'Hỗ trợ / góp ý:' 12 420 105 $pageHelp
 $lnkEmail = New-Object System.Windows.Forms.LinkLabel
@@ -3171,6 +3233,7 @@ foreach ($page in @($pageK3s, $pageApps)) {
         if ($c -is [System.Windows.Forms.ListView]) { $c.Anchor = 'Top, Bottom, Left, Right' }
     }
 }
+$lblK3sNet.Anchor = 'Top, Left, Right'; $btnK3sFix.Anchor = 'Top, Right'
 
 # Hai bảng "Ăn CPU / Ăn RAM" chia đôi bề ngang
 $script:ramTitle = $pageHealth.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Text -eq 'Ăn RAM nhiều nhất' }

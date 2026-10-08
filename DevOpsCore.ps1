@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.3'
+$PanelVersion = '1.0.4'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -231,6 +231,7 @@ function Stop-Component($c) {
 
 # ---------- K3s ----------
 $KubeEnv = 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml;'
+$IngressSelector = 'app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller'
 # Tên namespace/pod theo chuẩn Kubernetes (RFC 1123) - bắt buộc kiểm tra trước khi ghép vào lệnh bash
 function Test-K8sName([string]$s) { return ($s -cmatch '^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$') }
 
@@ -250,17 +251,26 @@ function Get-K3sInfo {
     if (-not (Test-UbuntuRunning)) { return [pscustomobject]@{ Running = $false; Reason = 'Ubuntu chưa chạy' } }
 
     # Gộp 1 lần gọi wsl (mỗi lần gọi ~0.7s): trạng thái service, pods, nodes - ngăn cách bằng dòng ###
+    $ingCols = 'NS:.metadata.namespace,PHASE:.status.phase,WAIT:.status.containerStatuses[0].state.waiting.reason,' +
+               'RESTARTS:.status.containerStatuses[0].restartCount,HN:.spec.hostNetwork,PORT:.spec.containers[0].ports[0].containerPort,HP:.spec.containers[0].ports[0].hostPort'
     $cols = 'NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase,WAIT:.status.containerStatuses[*].state.waiting.reason,' +
             'READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,' +
             'OWNER:.metadata.ownerReferences[0].kind,START:.status.startTime,DEL:.metadata.deletionTimestamp'
+    # Thêm IP hiện tại của WSL và pod ingress để phát hiện lỗi đổi mạng (đổi Wi-Fi -> k3s giữ IP cũ, ingress khởi động lại liên tục)
     $out = @(Invoke-Wsl ("$KubeEnv systemctl is-active k3s; echo '###';" +
         " k3s kubectl get pods -A --no-headers -o custom-columns='$cols' 2>/dev/null; echo '###';" +
-        " k3s kubectl get nodes --no-headers 2>/dev/null"))
+        " k3s kubectl get nodes -o wide --no-headers 2>/dev/null; echo '###';" +
+        " ip -4 route get 1.1.1.1 2>/dev/null | head -1; echo '###';" +
+        " k3s kubectl get pods -A -l $IngressSelector --no-headers -o custom-columns='$ingCols' 2>/dev/null"))
     if (([string]$out[0]).Trim() -ne 'active') { return [pscustomobject]@{ Running = $false; Reason = 'k3s đã dừng' } }
-    $sep = @(for ($i = 0; $i -lt $out.Count; $i++) { if (([string]$out[$i]).Trim() -eq '###') { $i } })
-    $lines     = if ($sep.Count -ge 2) { $out[($sep[0] + 1)..($sep[1] - 1)] } else { @() }
-    $nodeLines = if ($sep.Count -ge 2 -and $sep[1] -lt $out.Count - 1) { $out[($sep[1] + 1)..($out.Count - 1)] } else { @() }
-    if ($sep.Count -ge 2 -and $sep[1] - $sep[0] -le 1) { $lines = @() }
+    # Tách theo dòng ### thành các phần: 0 trạng thái, 1 pods, 2 nodes, 3 route, 4 ingress
+    $parts = @(, (New-Object System.Collections.ArrayList))
+    foreach ($l in $out) {
+        if (([string]$l).Trim() -eq '###') { $parts += , (New-Object System.Collections.ArrayList) }
+        elseif (([string]$l).Trim()) { [void]$parts[-1].Add([string]$l) }
+    }
+    while ($parts.Count -lt 5) { $parts += , (New-Object System.Collections.ArrayList) }
+    $lines = $parts[1]; $nodeLines = $parts[2]
 
     $pods = foreach ($l in $lines) {
         $f = ([string]$l).Trim() -split '\s+'
@@ -288,8 +298,29 @@ function Get-K3sInfo {
 
     $nodes = @($nodeLines | ForEach-Object {
         $f = ([string]$_).Trim() -split '\s+'
-        if ($f.Count -ge 5) { [pscustomobject]@{ Name = $f[0]; Status = $f[1]; Version = $f[4] } }
+        if ($f.Count -ge 5) { [pscustomobject]@{ Name = $f[0]; Status = $f[1]; Version = $f[4]; Ip = $(if ($f.Count -ge 6) { $f[5] } else { '' }) } }
     })
+
+    $wslIp = if (([string]$parts[3][0]) -match '\bsrc\s+(\S+)') { $Matches[1] } else { '' }
+    $nodeIp = if ($nodes.Count) { $nodes[0].Ip } else { '' }
+    $ing = $null
+    $f = if ($parts[4].Count) { ([string]$parts[4][0]).Trim() -split '\s+' } else { @() }
+    if ($f.Count -ge 7) {
+        $port = if ($f[6] -match '^\d+$') { [int]$f[6] } elseif ($f[4] -eq 'true' -and $f[5] -match '^\d+$') { [int]$f[5] } else { 0 }
+        $ing = [pscustomobject]@{
+            Namespace = $f[0]
+            Status    = if ($f[2] -ne '<none>') { $f[2] } else { $f[1] }
+            Restarts  = if ($f[3] -match '^\d+$') { [int]$f[3] } else { 0 }
+            Port      = $port
+            Open      = if ($port) { Test-Port $port } else { $null }   # thử từ Windows, đúng đường app gọi vào
+        }
+    }
+    $network = [pscustomobject]@{
+        WslIp    = $wslIp
+        NodeIp   = $nodeIp
+        Mismatch = [bool]($wslIp -and $nodeIp -and $wslIp -ne $nodeIp)
+        Ingress  = $ing
+    }
 
     [pscustomobject]@{
         Running   = $true
@@ -299,7 +330,17 @@ function Get-K3sInfo {
         Healthy   = @($pods | Where-Object Healthy).Count
         Unhealthy = @($pods | Where-Object { -not $_.Healthy }).Count
         Namespaces = @($pods.Namespace | Sort-Object -Unique).Count
+        Network   = $network
     }
+}
+
+# Sửa lỗi sau khi đổi Wi-Fi / IP: khởi động lại k3s để nhận IP mới, chờ API lên rồi tạo lại pod ingress
+function Repair-K3sNetwork {
+    if (-not (Test-UbuntuRunning)) { throw 'Ubuntu chưa chạy' }
+    $r = Invoke-Wsl ("$KubeEnv systemctl restart k3s || exit 1;" +
+        " for i in `$(seq 60); do k3s kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done;" +
+        " k3s kubectl delete pod -A -l $IngressSelector --wait=false 2>&1")
+    ($r | Out-String).Trim()
 }
 
 function Restart-K3sPod([string]$ns, [string]$pod) {
