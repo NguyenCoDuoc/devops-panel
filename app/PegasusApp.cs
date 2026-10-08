@@ -1,4 +1,4 @@
-﻿// DevOps Panel - launcher .exe: chạy DevOpsPanel.ps1 bên trong tiến trình của chính nó
+﻿// Develop Workspace - launcher .exe: chạy PegasusPanel.ps1 bên trong tiến trình của chính nó
 // để Windows coi đây là một app riêng (icon, Start Menu, ghim taskbar, gỡ trong Settings).
 // Build: xem install.ps1
 using System;
@@ -9,12 +9,12 @@ using System.Management.Automation.Runspaces;
 using System.Threading;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("DevOps Panel")]
-[assembly: AssemblyProduct("DevOps Panel")]
-[assembly: AssemblyCompany("DevOps Panel")]
+[assembly: AssemblyTitle("Develop Workspace")]
+[assembly: AssemblyProduct("Develop Workspace")]
+[assembly: AssemblyCompany("Develop Workspace")]
 [assembly: AssemblyDescription("Bảng điều khiển Ubuntu (WSL), PostgreSQL, Docker, sức khỏe máy")]
-[assembly: AssemblyVersion("1.0.4.0")]
-[assembly: AssemblyFileVersion("1.0.4.0")]
+[assembly: AssemblyVersion("1.0.5.0")]
+[assembly: AssemblyFileVersion("1.0.5.0")]
 
 static class Program
 {
@@ -22,10 +22,10 @@ static class Program
     static int Main()
     {
         string dir = AppDomain.CurrentDomain.BaseDirectory;
-        string script = Path.Combine(dir, "DevOpsPanel.ps1");
+        string script = Path.Combine(dir, "PegasusPanel.ps1");
         if (!File.Exists(script))
         {
-            MessageBox.Show("Không tìm thấy DevOpsPanel.ps1 cạnh file exe:\n" + script, "DevOps Panel",
+            MessageBox.Show("Không tìm thấy PegasusPanel.ps1 cạnh file exe:\n" + script, "Develop Workspace",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
@@ -51,7 +51,7 @@ static class Program
         catch (Exception ex)
         {
             File.AppendAllText(Path.Combine(dir, "app-error.log"), DateTime.Now + "  " + ex + Environment.NewLine);
-            MessageBox.Show("DevOps Panel gặp lỗi:\n\n" + ex.Message, "DevOps Panel",
+            MessageBox.Show("Develop Workspace gặp lỗi:\n\n" + ex.Message, "Develop Workspace",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }

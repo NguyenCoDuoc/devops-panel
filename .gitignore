@@ -1,4 +1,4 @@
-# Per-machine configuration and project catalog
+﻿# Per-machine configuration and project catalog
 apps.json
 settings.json
 webpanel.json
@@ -9,8 +9,8 @@ dist/*
 !dist/.gitkeep
 
 # Locally built launchers and installers
-DevOpsPanel.exe
-"DUOCNC DevOps.exe"
+PegasusPanel.exe
+"Pegasus Control Center.exe"
 *.pdb
 
 # Web Panel: bản trả phí, giữ ở máy, không đưa lên repo

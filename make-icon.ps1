@@ -1,4 +1,4 @@
-﻿# Tạo icon.ico cho DUOCNC DevOps Panel (nhiều kích thước, PNG bên trong ICO)
+﻿# Tạo icon.ico cho Pegasus Control Center (nhiều kích thước, PNG bên trong ICO)
 Add-Type -AssemblyName System.Drawing
 $out   = Join-Path $PSScriptRoot 'icon.ico'
 $sizes = 16, 24, 32, 48, 64, 128, 256

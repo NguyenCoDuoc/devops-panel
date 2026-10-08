@@ -1,20 +1,20 @@
-﻿# DevOps Panel - logic dùng chung cho DevOpsPanel.ps1 (desktop) và Web Panel (bản trả phí, không nằm trong repo)
+﻿# Develop Workspace - logic dùng chung cho PegasusPanel.ps1 (desktop) và Web Panel (bản trả phí, không nằm trong repo)
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.4'
+$PanelVersion = '1.0.5'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
 # ---------- Cấu hình theo người dùng ----------
 # Nằm ở %APPDATA% (không phải thư mục cài) để cài lại / nâng cấp bản mới không mất cấu hình, danh mục app, log.
-$DataDir    = if ($env:DEVOPS_PANEL_DATA) { $env:DEVOPS_PANEL_DATA } else { Join-Path $env:APPDATA 'DevOpsPanel' }     # biến môi trường: chạy thử với dữ liệu riêng
+$DataDir    = if ($env:DEVOPS_PANEL_DATA) { $env:DEVOPS_PANEL_DATA } else { Join-Path $env:APPDATA 'PegasusPanel' }     # biến môi trường: chạy thử với dữ liệu riêng
 $ConfigFile = Join-Path $DataDir 'config.json'
 New-Item -ItemType Directory -Force $DataDir | Out-Null
 
 function Get-PanelConfig {
     $cfg = [ordered]@{
-        appName         = 'DevOps Panel'
+        appName         = 'Develop Workspace'
         distro          = ''          # rỗng = tự chọn distro Ubuntu đầu tiên
         pgUbuntuPort    = 0           # 0 = không có PostgreSQL trong WSL
         autoStartUbuntu = $false
@@ -29,8 +29,10 @@ function Get-PanelConfig {
         aiMode          = 1           # 0 = chỉ đọc, 1 = cho sửa file, 2 = toàn quyền
         aiModel         = ''          # rỗng = model mặc định của CLI
         aiDirs          = @()         # thư mục làm việc dùng gần đây
+        aiSessions      = @()         # các phiên AI gần đây, nhóm theo thư mục
         navLayout       = 'top'       # menu tab: top = trên dải tiêu đề, side = thanh bên trái
         navCollapsed    = $false      # thanh bên trái thu gọn chỉ còn icon
+        noLockOnSleep   = $false      # không yêu cầu đăng nhập sau khi thức dậy
     }
     if (Test-Path $ConfigFile) {
         $j = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -40,15 +42,18 @@ function Get-PanelConfig {
         $legacy = Join-Path $PSScriptRoot 'settings.json'
         if (Test-Path $legacy) {
             $j = Get-Content $legacy -Raw | ConvertFrom-Json
-            $cfg.appName = 'DUOCNC DevOps Panel'
+            $cfg.appName = 'Develop Workspace'
             if ($null -ne $j.autoStartUbuntu) { $cfg.autoStartUbuntu = [bool]$j.autoStartUbuntu }
             $cfg.distro = 'Ubuntu'
             $cfg.pgUbuntuPort = 5434
         }
         Save-PanelConfig ([pscustomobject]$cfg)
     }
+    # Migrate tên thương hiệu cũ, giữ nguyên tên tuỳ chỉnh trong Cài đặt.
+    if ($cfg.appName -in @('SH Dev Panel', 'DevOps Panel', 'DUOCNC DevOps Panel', 'Pegasus Control Center', 'Pegasus Control Center Panel', 'Develop Workspace Panel', 'DEV SH Panel')) { $cfg.appName = 'Develop Workspace'; Save-PanelConfig ([pscustomobject]$cfg) }
     $cfg.scanRoots = @($cfg.scanRoots | Where-Object { $_ })
     $cfg.aiDirs = @($cfg.aiDirs | Where-Object { $_ })
+    $cfg.aiSessions = @($cfg.aiSessions | Where-Object { $_.Id -and $_.Dir -and $_.Tool })
     [pscustomobject]$cfg
 }
 function Save-PanelConfig($cfg) {
@@ -76,6 +81,15 @@ function Get-WslDistros {
     @($r.Out -split "`r?`n" | ForEach-Object { $_.Trim([char]0, ' ') } | Where-Object { $_ -and $_ -notlike 'docker-desktop*' })
 }
 
+function Set-SleepLockPreference([bool]$NoLock) {
+    $value = if ($NoLock) { 0 } else { 1 }
+    $command = "powercfg.exe /setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK $value && powercfg.exe /setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK $value && powercfg.exe /setactive SCHEME_CURRENT"
+    $args = "/d /c `"$command`""
+    # Windows protects wake-lock policy; request elevation only when the user changes this opt-in setting.
+    $p = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\cmd.exe') -ArgumentList $args -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "Windows không đổi được yêu cầu khóa sau Sleep (mã $($p.ExitCode))." }
+}
+
 function Find-FirstPath([string[]]$candidates) {
     foreach ($p in $candidates) { if ($p -and (Test-Path $p)) { return $p } }
     return $null
@@ -83,7 +97,7 @@ function Find-FirstPath([string[]]$candidates) {
 
 $PanelConfig  = Get-PanelConfig
 $AppName      = [string]$PanelConfig.appName
-# Runspace nền (DevOpsPanel.ps1 truyền $CoreShared) dùng lại kết quả dò của luồng chính
+# Runspace nền (PegasusPanel.ps1 truyền $CoreShared) dùng lại kết quả dò của luồng chính
 $WslDistros   = if ($CoreShared) { $CoreShared.WslDistros } else { Get-WslDistros }
 $Distro       = if ($CoreShared) { $CoreShared.Distro }
                 elseif ($PanelConfig.distro -and $WslDistros -contains $PanelConfig.distro) { $PanelConfig.distro }
@@ -370,6 +384,44 @@ $DefaultScanRanges = @(@(5000, 5099), @(7000, 7199))
 
 $legacyLogs = Join-Path $PSScriptRoot 'logs'                  # log + pid của bản cài từ mã nguồn
 if (-not (Test-Path $AppsLogDir) -and (Test-Path $legacyLogs)) { Copy-Item $legacyLogs $AppsLogDir -Recurse }
+
+# ---------- Dọn log tự động mỗi ngày ----------
+# Mỗi lần khởi động: nếu hôm nay chưa dọn, cắt bớt file .log cũ hơn ngày hiện tại
+# Giữ lại tối đa $LogKeepTailLines dòng cuối + dòng phân cách để vẫn xem được context gần nhất
+function Invoke-DailyLogCleanup {
+    if (-not (Test-Path $AppsLogDir)) { return }
+    $today      = (Get-Date).ToString('yyyy-MM-dd')
+    $markerFile = Join-Path $AppsLogDir ".cleanup-$today"
+    if (Test-Path $markerFile) { return }          # hôm nay đã dọn rồi
+
+    $keepLines = 200                               # số dòng cuối giữ lại mỗi file
+    $cutoffDays = 1                                # cắt log cũ hơn N ngày
+    $cutoff = (Get-Date).AddDays(-$cutoffDays)
+    $cleaned = 0; $savedKB = 0
+
+    Get-ChildItem $AppsLogDir -Filter '*.log' -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.LastWriteTime -lt $cutoff
+    } | ForEach-Object {
+        try {
+            $sizeBefore = $_.Length
+            $lines = @(Get-Content $_.FullName -Encoding UTF8 -ErrorAction Stop)
+            if ($lines.Count -le $keepLines) { return }    # file nhỏ, bỏ qua
+            $kept = $lines[($lines.Count - $keepLines)..($lines.Count - 1)]
+            $header = "==== $today  [Log đã được dọn tự động - giữ $keepLines dòng cuối] ===="
+            ($header, '') + $kept | Set-Content $_.FullName -Encoding UTF8 -ErrorAction Stop
+            $savedKB += [int](($sizeBefore - $_.Length) / 1KB)
+            $cleaned++
+        } catch { }    # file đang bị app giữ → bỏ qua, lần sau dọn
+    }
+
+    # Xoá marker ngày cũ để không tích luỹ
+    Get-ChildItem $AppsLogDir -Filter '.cleanup-*' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne ".cleanup-$today" } | Remove-Item -Force -ErrorAction SilentlyContinue
+
+    # Ghi marker hôm nay
+    $today | Set-Content $markerFile -Encoding UTF8
+}
+Invoke-DailyLogCleanup
 
 if (-not (Test-Path $AppsFile)) {
     $legacyApps = Join-Path $PSScriptRoot 'apps.json'        # bản cài từ mã nguồn để apps.json cạnh script
@@ -812,7 +864,7 @@ function Resolve-ImportedDir([string]$dir, [string[]]$oldRoots, [string[]]$newRo
 
 function Import-AppsCatalog([string]$path) {
     $j = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
-    if (-not $j.apps) { throw 'File không phải danh mục app của DevOps Panel' }
+    if (-not $j.apps) { throw 'File không phải danh mục app của Develop Workspace' }
     $cfg = Get-AppsConfig
     $newRoots = @($PanelConfig.scanRoots | Where-Object { $_ -and (Test-Path $_) })
     $oldRoots = @($j.scanRoots | Where-Object { $_ })
@@ -1087,7 +1139,7 @@ function Invoke-ReposGit([string[]]$roots, [string]$action) {
     , @($out)
 }
 
-# Tạo nhánh theo git-flow Sunhouse: feature/ fix/ bugfix/ tách từ main, hotfix/ tách từ production.
+# Tạo nhánh theo git-flow: feature/ fix/ bugfix/ tách từ main, hotfix/ tách từ production.
 # Tách từ origin/<gốc> mới fetch (= pull nhánh gốc rồi tách), không track nhánh gốc, không push.
 # $carry = mang theo thay đổi chưa commit sang nhánh mới (git switch tự từ chối nếu xung đột với nhánh gốc)
 function New-RepoFlowBranch([string[]]$roots, [string]$type, [string]$name, [bool]$carry = $false) {
@@ -1119,7 +1171,7 @@ function Get-RepoWebUrl([string]$root) {
     ($u -replace '://[^/@\s]+@', '://') -replace '\.git$', ''
 }
 
-# Push nhánh hiện tại rồi trả về link tạo Merge Request đúng nhánh đích theo git-flow Sunhouse:
+# Push nhánh hiện tại rồi trả về link tạo Merge Request đúng nhánh đích theo git-flow:
 # feature/ fix/ bugfix/ -> main ; hotfix/ -> production. Không cho push thẳng main / production.
 function Push-RepoBranchForMr([string]$root) {
     $branch = (Invoke-Git $root @('rev-parse', '--abbrev-ref', 'HEAD')).Out.Trim()
@@ -1308,8 +1360,8 @@ function ConvertTo-PanelVersion([string]$tag) {
 function Get-LatestRelease {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $r = Invoke-RestMethod "https://api.github.com/repos/$UpdateRepo/releases/latest" -UseBasicParsing -TimeoutSec 15 `
-        -Headers @{ 'User-Agent' = "DevOpsPanel/$PanelVersion"; 'Accept' = 'application/vnd.github+json' }
-    $asset = @($r.assets | Where-Object { $_.name -eq 'DevOpsPanel-Setup.exe' }) | Select-Object -First 1
+        -Headers @{ 'User-Agent' = "PegasusPanel/$PanelVersion"; 'Accept' = 'application/vnd.github+json' }
+    $asset = @($r.assets | Where-Object { $_.name -eq 'PegasusPanel-Setup.exe' }) | Select-Object -First 1
     $ver = ConvertTo-PanelVersion $r.tag_name
     [pscustomobject]@{
         Tag = $r.tag_name; Version = [string]$ver; Name = $r.name; Notes = [string]$r.body; Url = $r.html_url
@@ -1322,9 +1374,9 @@ function Get-LatestRelease {
 function Save-UpdateInstaller([string]$url, [string]$version, [long]$size = 0) {
     if ($url -notmatch '^https://(github\.com|objects\.githubusercontent\.com)/') { throw 'Link tải bộ cài không hợp lệ' }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $dest = Join-Path $env:TEMP "DevOpsPanel-Setup-$version.exe"
+    $dest = Join-Path $env:TEMP "PegasusPanel-Setup-$version.exe"
     $wc = New-Object System.Net.WebClient
-    $wc.Headers['User-Agent'] = "DevOpsPanel/$PanelVersion"
+    $wc.Headers['User-Agent'] = "PegasusPanel/$PanelVersion"
     try { $wc.DownloadFile($url, $dest) } finally { $wc.Dispose() }
     $fi = Get-Item $dest
     $head = [IO.File]::ReadAllBytes($dest)[0..1]
@@ -1442,10 +1494,46 @@ function Get-HealthInfo {
 }
 
 # ---------- Nguồn máy tính ----------
+function Enable-SystemSleepPrivilege {
+    if (-not ('PccNativePower' -as [type])) {
+        Add-Type -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class PccNativePower {
+    [StructLayout(LayoutKind.Sequential)] struct LUID { public uint LowPart; public int HighPart; }
+    [StructLayout(LayoutKind.Sequential)] struct TOKEN_PRIVILEGES { public uint Count; public LUID Luid; public uint Attributes; }
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool LookupPrivilegeValue(string system, string name, out LUID luid);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TOKEN_PRIVILEGES state, uint length, IntPtr previous, IntPtr returned);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("powrprof.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.U1)]
+    static extern bool SetSuspendState([MarshalAs(UnmanagedType.U1)] bool hibernate, [MarshalAs(UnmanagedType.U1)] bool force, [MarshalAs(UnmanagedType.U1)] bool disableWakeEvents);
+    public static void EnableShutdownPrivilege() {
+        IntPtr token;
+        if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            LUID luid;
+            if (!LookupPrivilegeValue(null, "SeShutdownPrivilege", out luid)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            TOKEN_PRIVILEGES state = new TOKEN_PRIVILEGES(); state.Count = 1; state.Luid = luid; state.Attributes = 2;
+            if (!AdjustTokenPrivileges(token, false, ref state, 0, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            int error = Marshal.GetLastWin32Error();
+            if (error == 1300) throw new Win32Exception(error, "Tài khoản chạy Web Panel chưa được cấp quyền Shutdown.");
+        } finally { CloseHandle(token); }
+    }
+    public static void Sleep() {
+        if (!SetSuspendState(false, false, false)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+}
+"@
+    }
+    [PccNativePower]::EnableShutdownPrivilege()
+}
+
 function Invoke-PowerAction([string]$action) {
     switch ($action) {
-        'sleep'    { Add-Type -AssemblyName System.Windows.Forms
-                     [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false) | Out-Null }
+        'sleep'    { Enable-SystemSleepPrivilege; [PccNativePower]::Sleep() }
         'restart'  { shutdown.exe /r /t 15 /c "${AppName}: khởi động lại sau 15 giây" }
         'shutdown' { shutdown.exe /s /t 15 /c "${AppName}: tắt máy sau 15 giây" }
         'cancel'   { shutdown.exe /a }

@@ -1,7 +1,7 @@
-﻿// DevOps Panel - bộ cài một file. Nhúng payload.zip (panel + launcher) làm resource.
+﻿// Develop Workspace - bộ cài một file. Nhúng payload.zip (panel + launcher) làm resource.
 // Cài cho user hiện tại, không cần quyền Admin:
-//   %LOCALAPPDATA%\Programs\DevOpsPanel  + shortcut Start Menu / Desktop + mục gỡ trong Settings > Apps.
-// Cấu hình người dùng ở %APPDATA%\DevOpsPanel không bị đụng tới (cài lại / nâng cấp giữ nguyên).
+//   %LOCALAPPDATA%\Programs\PegasusPanel  + shortcut Start Menu / Desktop + mục gỡ trong Settings > Apps.
+// Cấu hình người dùng ở %APPDATA%\PegasusPanel không bị đụng tới (cài lại / nâng cấp giữ nguyên).
 // Build: build-setup.ps1 (csc.exe có sẵn trong Windows - chỉ hỗ trợ C# 5, không dùng $"" / ?.)
 // Tham số: /S = cài im lặng, không hỏi, không mở app.
 using System;
@@ -14,17 +14,17 @@ using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("DevOps Panel Setup")]
-[assembly: AssemblyProduct("DevOps Panel")]
-[assembly: AssemblyDescription("Bộ cài DevOps Panel")]
-[assembly: AssemblyVersion("1.0.4.0")]
-[assembly: AssemblyFileVersion("1.0.4.0")]
+[assembly: AssemblyTitle("Develop Workspace Setup")]
+[assembly: AssemblyProduct("Develop Workspace")]
+[assembly: AssemblyDescription("Bộ cài Develop Workspace")]
+[assembly: AssemblyVersion("1.0.5.0")]
+[assembly: AssemblyFileVersion("1.0.5.0")]
 
 static class Setup
 {
-    const string ProductId = "DevOpsPanel";
-    const string Version = "1.0.4";
-    const string ExeName = "DevOpsPanel.exe";
+    const string ProductId = "PegasusPanel";
+    const string Version = "1.0.5";
+    const string ExeName = "PegasusPanel.exe";
     const string SupportEmail = "coduoc2502@gmail.com";
 
     [STAThread]
@@ -32,7 +32,7 @@ static class Setup
     {
         bool silent = args.Any(a => a.Equals("/S", StringComparison.OrdinalIgnoreCase) || a.Equals("/silent", StringComparison.OrdinalIgnoreCase));
         string installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", ProductId);
-        string appName = ReadAppName() ?? "DevOps Panel";
+        string appName = ReadAppName() ?? "Develop Workspace";
 
         if (!silent)
         {
@@ -67,7 +67,7 @@ static class Setup
 
             string exe = Path.Combine(installDir, ExeName);
             string safeName = Regex.Replace(appName, "[\\\\/:*?\"<>|]", "").Trim();
-            if (safeName.Length == 0) safeName = "DevOps Panel";
+            if (safeName.Length == 0) safeName = "Develop Workspace";
 
             string programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -84,7 +84,7 @@ static class Setup
             {
                 k.SetValue("DisplayName", appName);
                 k.SetValue("DisplayVersion", Version);
-                k.SetValue("Publisher", "DevOps Panel");
+                k.SetValue("Publisher", "Develop Workspace");
                 k.SetValue("Contact", SupportEmail);
                 k.SetValue("HelpLink", "mailto:" + SupportEmail);
                 k.SetValue("DisplayIcon", exe + ",0");
@@ -122,6 +122,7 @@ static class Setup
             Match m = Regex.Match(File.ReadAllText(cfg), "\"appName\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
             if (!m.Success) return null;
             string name = Regex.Unescape(m.Groups[1].Value).Trim();
+            if (name == "DevOps Panel" || name == "DUOCNC DevOps Panel" || name == "Pegasus Control Center" || name == "Pegasus Control Center Panel" || name == "Develop Workspace Panel" || name == "DEV SH Panel" || name == "SH Dev Panel") name = "Develop Workspace";
             return name.Length > 0 ? name : null;
         }
         catch { return null; }

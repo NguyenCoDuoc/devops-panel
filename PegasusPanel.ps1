@@ -1,26 +1,114 @@
-﻿# DevOps Panel - bảng điều khiển WSL, PostgreSQL, K3s, Docker, ứng dụng dev, sức khỏe máy
-# Chạy: DevOpsPanel.exe (bản cài) hoặc powershell -NoProfile -ExecutionPolicy Bypass -File DevOpsPanel.ps1
+﻿# Develop Workspace - bảng điều khiển WSL, PostgreSQL, K3s, Docker, ứng dụng dev, sức khỏe máy
+# Chạy: PegasusPanel.exe (bản cài) hoặc powershell -NoProfile -ExecutionPolicy Bypass -File PegasusPanel.ps1
 $ErrorActionPreference = 'SilentlyContinue'
 $env:WSL_UTF8 = '1'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 # Chỉ cho chạy 1 cửa sổ panel
-$mutex = New-Object System.Threading.Mutex($false, 'Local\DevOpsPanel')
+$mutex = New-Object System.Threading.Mutex($false, 'Local\PegasusPanel')
 if (-not $mutex.WaitOne(0)) {
-    [System.Windows.Forms.MessageBox]::Show('DevOps Panel đang chạy (xem icon ở khay hệ thống).', 'DevOps Panel') | Out-Null
+    [System.Windows.Forms.MessageBox]::Show('Develop Workspace đang chạy (xem icon ở khay hệ thống).', 'Develop Workspace') | Out-Null
     exit
 }
 
-. (Join-Path $PSScriptRoot 'DevOpsCore.ps1')
+# ===================== SPLASH SCREEN =====================
+# Hiện ngay lập tức trước khi load Core / UI tabs (các bước nặng)
+# Tự đóng sau khi form chính đã Shown
+$_splashIcon = if (Test-Path (Join-Path $PSScriptRoot 'icon.ico')) { New-Object System.Drawing.Icon((Join-Path $PSScriptRoot 'icon.ico')) } else { $null }
+$_splash = New-Object System.Windows.Forms.Form
+$_splash.FormBorderStyle = 'None'
+$_splash.StartPosition     = 'CenterScreen'
+$_splash.Size              = New-Object System.Drawing.Size(420, 220)
+$_splash.BackColor         = [System.Drawing.Color]::FromArgb(18, 20, 26)
+$_splash.TopMost           = $true
+$_splash.ShowInTaskbar     = $false
+if ($_splashIcon) { $_splash.Icon = $_splashIcon }
+# Bo góc cửa sổ (Win11+)
+try {
+    Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+public class _SplashDwm {
+    [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr h, int a, ref int v, int s);
+}
+"@ -ErrorAction Stop
+    $r = 12; [_SplashDwm]::DwmSetWindowAttribute($_splash.Handle, 33, [ref]$r, 4) | Out-Null
+} catch {}
+$_splash.Add_Paint({
+    param($s, $e)
+    $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'
+    $w = $s.ClientSize.Width; $h = $s.ClientSize.Height
+    # Nền gradient
+    $grad = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+        (New-Object System.Drawing.Point(0, 0)), (New-Object System.Drawing.Point($w, $h)),
+        [System.Drawing.Color]::FromArgb(22, 24, 32), [System.Drawing.Color]::FromArgb(28, 32, 48))
+    $g.FillRectangle($grad, 0, 0, $w, $h); $grad.Dispose()
+    # Viền mỏng
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(55, 60, 80), 1)
+    $g.DrawRectangle($pen, 0, 0, ($w - 1), ($h - 1)); $pen.Dispose()
+    # Icon
+    if ($_splashIcon) { $g.DrawIcon($_splashIcon, (New-Object System.Drawing.Rectangle(($w/2 - 28), 30, 56, 56))) }
+    # Ten app
+    $fApp = New-Object System.Drawing.Font('Segoe UI Semibold', 16)
+    $appColor = [System.Drawing.Color]::FromArgb(230, 232, 245)
+    [System.Windows.Forms.TextRenderer]::DrawText($g, 'Develop Workspace', $fApp,
+        (New-Object System.Drawing.Rectangle(0, 96, $w, 30)), $appColor,
+        [System.Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine')
+    $fApp.Dispose()
+    # Tagline
+    $fSub = New-Object System.Drawing.Font('Segoe UI', 9)
+    $subColor = [System.Drawing.Color]::FromArgb(100, 108, 140)
+    [System.Windows.Forms.TextRenderer]::DrawText($g, 'Code · DevOps · Systems', $fSub,
+        (New-Object System.Drawing.Rectangle(0, 128, $w, 22)), $subColor,
+        [System.Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine')
+    $fSub.Dispose()
+    # Progress bar
+    $barY = 172; $barH = 4; $barPad = 60
+    $bgR = New-Object System.Drawing.RectangleF($barPad, $barY, ($w - $barPad * 2), $barH)
+    $bgBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(40, 45, 65))
+    $g.FillRectangle($bgBr, $bgR); $bgBr.Dispose()
+    $pct = if ($script:_splashPct) { [math]::Min(100, $script:_splashPct) } else { 0 }
+    if ($pct -gt 0) {
+        $fillW = ($w - $barPad * 2) * $pct / 100
+        $grad2 = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.Point($barPad, $barY)), (New-Object System.Drawing.Point(($barPad + $fillW), $barY)),
+            [System.Drawing.Color]::FromArgb(120, 130, 255), [System.Drawing.Color]::FromArgb(80, 200, 255))
+        $g.FillRectangle($grad2, $barPad, $barY, $fillW, $barH); $grad2.Dispose()
+    }
+    # Status text
+    $fSt = New-Object System.Drawing.Font('Segoe UI', 8)
+    $stTxt = if ($script:_splashStatus) { $script:_splashStatus } else { 'Khoi dong...' }
+    [System.Windows.Forms.TextRenderer]::DrawText($g, $stTxt, $fSt,
+        (New-Object System.Drawing.Rectangle(0, 185, $w, 20)), [System.Drawing.Color]::FromArgb(80, 88, 115),
+        [System.Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine')
+    $fSt.Dispose()
+})
+$script:_splashPct = 5; $script:_splashStatus = 'Khoi dong...'
+$_splash.Show()
+[System.Windows.Forms.Application]::DoEvents()
+function Update-Splash([int]$pct, [string]$status) {
+    $script:_splashPct = $pct; $script:_splashStatus = $status
+    try { $_splash.Invalidate(); [System.Windows.Forms.Application]::DoEvents() } catch {}
+}
+# ==========================================================
+
+Update-Splash 15 'Nap nhan dien phan cung...'
+. (Join-Path $PSScriptRoot 'PegasusCore.ps1')
+Update-Splash 45 'Nap giao dien...'
+$uiDir = Join-Path $PSScriptRoot 'ui'
+if (Test-Path $uiDir) {
+    Get-ChildItem $uiDir -Filter *.ps1 | ForEach-Object { . $_.FullName }
+}
+Update-Splash 80 'Dang xay dung UI...'
+
 # Kết quả dò máy (wsl.exe, WMI) chuyển cho các runspace nền để chúng khỏi dò lại mỗi lần nạp core
 $CoreShared = @{ WslDistros = $WslDistros; Distro = $Distro; Components = $Components }
 $IconFile    = Join-Path $PSScriptRoot 'icon.ico'
 $AppIcon     = if (Test-Path $IconFile) { New-Object System.Drawing.Icon($IconFile) } else { [System.Drawing.SystemIcons]::Application }
-$LauncherExe = Find-FirstPath @((Join-Path $PSScriptRoot 'DevOpsPanel.exe'), (Join-Path $PSScriptRoot 'DUOCNC DevOps.exe'))
+$LauncherExe = Find-FirstPath @((Join-Path $PSScriptRoot 'PegasusPanel.exe'), (Join-Path $PSScriptRoot 'Develop Workspace.exe'), (Join-Path $PSScriptRoot 'SH Dev Panel.exe'))
 $HasWebPanel = Test-Path (Join-Path $PSScriptRoot 'WebPanel.ps1')     # Web Panel là bản trả phí: chỉ có khi đặt WebPanel.ps1 cạnh script
 
-# ---------- Settings (config.json trong %APPDATA%\DevOpsPanel) ----------
+# ---------- Settings (config.json trong %APPDATA%\PegasusPanel) ----------
 function Get-Settings { $PanelConfig }
 function Save-Settings($s) { Save-PanelConfig $s }
 
@@ -83,7 +171,7 @@ function New-Rgb([int]$r, [int]$g, [int]$b) { [System.Drawing.Color]::FromArgb($
 $ThemePalettes = @{
     light = @{
         Back = (New-Rgb 243 245 249); Card = (New-Rgb 255 255 255); Surface = (New-Rgb 255 255 255); Alt = (New-Rgb 248 250 252); Header = (New-Rgb 241 244 248)
-        Text = (New-Rgb 30 37 50); Muted = (New-Rgb 100 110 130); Gray = (New-Rgb 150 158 172)
+        Text = (New-Rgb 30 37 50); Muted = (New-Rgb 82 92 108); Gray = (New-Rgb 150 158 172)
         Ok = (New-Rgb 22 163 74); Err = (New-Rgb 220 38 38); Warn = (New-Rgb 217 119 6)
         Info = (New-Rgb 37 99 235); ErrBg = (New-Rgb 253 236 236); Link = (New-Rgb 79 70 229)
         ChartBg = (New-Rgb 250 251 253); Grid = (New-Rgb 228 232 239)
@@ -189,7 +277,7 @@ $IconRules = @(
     @('Gửi', 'E724', 'Text'), @('Dừng', 'E71A', 'Err'), @('Phiên mới', 'E710', 'Text'), @('Xem thay đổi', 'E890', 'Text'), @('Cài / cập nhật CLI', 'E896', 'Text'),
     @('Code với AI', 'E99A', 'Info'), @('Mở bằng AI', 'E99A', 'Info')
 )
-$TabIcons = @{ 'Dịch vụ' = 'E9F5'; 'Ứng dụng' = 'E74C'; 'Git' = 'F003'; 'Sức khỏe' = 'E95E'; 'K3s' = 'E7B8'; 'Cài đặt' = 'E713'; 'Trợ giúp' = 'E9CE'; 'AI Code' = 'E99A' }
+$TabIcons = @{ 'Dịch vụ' = 'E9F5'; 'Ứng dụng' = 'E74C'; 'Git' = 'F003'; 'DB Helper' = 'E756'; 'Log Viewer' = 'E8A5'; 'Sức khỏe' = 'E95E'; 'K3s' = 'E7B8'; 'Cài đặt' = 'E713'; 'Trợ giúp' = 'E9CE'; 'AI Code' = 'E99A' }
 
 function Get-IconBitmap([string]$code, [System.Drawing.Color]$color, [int]$px = 16) {
     $key = "$code|$($color.ToArgb())|$px"
@@ -290,16 +378,20 @@ $pageSettings = New-Object System.Windows.Forms.TabPage('Cài đặt')
 $pageGit    = New-Object System.Windows.Forms.TabPage('Git')
 $pageHelp   = New-Object System.Windows.Forms.TabPage('Trợ giúp')
 $pageAi     = New-Object System.Windows.Forms.TabPage('AI Code')
-$tabs.TabPages.AddRange(@($pageMain, $pageApps, $pageGit, $pageHealth, $pageK3s, $pageSettings, $pageAi, $pageHelp))
+$pageDbTools = New-Object System.Windows.Forms.TabPage('DB Helper')
+$pageLogs    = New-Object System.Windows.Forms.TabPage('Log Viewer')
+$tabs.TabPages.AddRange(@($pageMain, $pageApps, $pageAi, $pageGit, $pageLogs, $pageDbTools, $pageHealth, $pageK3s, $pageSettings, $pageHelp))
+if (Get-Command Build-TabDbTools -ErrorAction SilentlyContinue) { Build-TabDbTools $pageDbTools }
+if (Get-Command Build-TabLogs -ErrorAction SilentlyContinue) { Build-TabLogs $pageLogs }
 $form.Controls.Add($tabs)
 
 # Dải tiêu đề chuyển màu ở trên cùng: icon, tên app, lời chào + các chip CPU / RAM / số app đang chạy
 # (tab được đẩy xuống trong Load, sau khi đã neo control để không lệch bố cục thiết kế)
 $HeaderH = 56
-$HeaderFont = New-Object System.Drawing.Font('Segoe UI Semibold', 13)
+$HeaderFont = New-Object System.Drawing.Font('Segoe UI Semibold', 12)
 $HeaderSub = New-Object System.Drawing.Font('Segoe UI', 9)
-$TabFont = New-Object System.Drawing.Font('Segoe UI', 10)
-$TabFontSel = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+$TabFont = New-Object System.Drawing.Font('Segoe UI', 9.5)
+$TabFontSel = New-Object System.Drawing.Font('Segoe UI Semibold', 9.5)
 $CardFont = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
 $script:hdrChips = @()
 $header = New-Object System.Windows.Forms.Panel
@@ -310,19 +402,17 @@ $header.Add_Paint({
     $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'
     $r = $s.ClientRectangle
     if ($r.Width -lt 2) { return }
-    $br = New-Object System.Drawing.Drawing2D.LinearGradientBrush($r, $Theme.Accent, $Theme.Accent2, [single]0)
-    $g.FillRectangle($br, $r); $br.Dispose()
+    $bg = New-Object System.Drawing.SolidBrush($Theme.Back)
+    $g.FillRectangle($bg, $r); $bg.Dispose()
     $g.DrawIcon($AppIcon, (New-Object System.Drawing.Rectangle(16, 12, 32, 32)))
-    $white = [System.Drawing.Color]::White
-    [System.Windows.Forms.TextRenderer]::DrawText($g, $AppName, $HeaderFont, (New-Object System.Drawing.Point(56, 7)), $white)
+    [System.Windows.Forms.TextRenderer]::DrawText($g, $AppName, $HeaderFont, (New-Object System.Drawing.Point(56, 7)), $Theme.Text)
     $sub = "v$PanelVersion  ·  $((Get-Greeting) -replace '^\W+\s*', '')"
-    [System.Windows.Forms.TextRenderer]::DrawText($g, $sub, $HeaderSub, (New-Object System.Drawing.Point(58, 32)), (Get-Alpha 225 $white))
+    [System.Windows.Forms.TextRenderer]::DrawText($g, $sub, $HeaderSub, (New-Object System.Drawing.Point(58, 32)), $Theme.Muted)
     $navEnd = 56 + [math]::Max([System.Windows.Forms.TextRenderer]::MeasureText($AppName, $HeaderFont).Width, [System.Windows.Forms.TextRenderer]::MeasureText($sub, $HeaderSub).Width)
     $script:hdrTabs = @()
     if ($PanelConfig.navLayout -ne 'side') {
-        # Menu tab dạng pill trắng trên dải màu; không đủ chỗ thì chỉ hiện icon (rê chuột để xem tên)
-        $x = $navEnd + 28
-        $ws = @(foreach ($pg in $tabs.TabPages) { [System.Windows.Forms.TextRenderer]::MeasureText($pg.Text, $TabFontSel).Width + 46 })
+        $x = $navEnd + 24
+        $ws = @(foreach ($pg in $tabs.TabPages) { [System.Windows.Forms.TextRenderer]::MeasureText($pg.Text, $TabFontSel).Width + 44 })
         $iconOnly = ($x + ($ws | Measure-Object -Sum).Sum + 4 * $ws.Count) -gt ($r.Right - 14)
         $rects = @()
         for ($i = 0; $i -lt $tabs.TabCount; $i++) {
@@ -331,14 +421,18 @@ $header.Add_Paint({
             $rc = New-Object System.Drawing.Rectangle($x, 12, $w, 32)
             $rects += $rc
             if ($sel -or $i -eq $script:hdrHover) {
-                $p = New-RoundRect $rc.X $rc.Y $rc.Width $rc.Height 10
-                $fill = New-Object System.Drawing.SolidBrush((Get-Alpha $(if ($sel) { 70 } else { 32 }) $white)); $g.FillPath($fill, $p); $fill.Dispose(); $p.Dispose()
+                $p = New-RoundRect $rc.X $rc.Y $rc.Width $rc.Height 8
+                $fillColor = if ($sel) { $Theme.Surface } else { $Theme.Hi }
+                $fill = New-Object System.Drawing.SolidBrush($fillColor); $g.FillPath($fill, $p); $fill.Dispose()
+                if ($sel) { $pen = New-Object System.Drawing.Pen($Theme.Border); $g.DrawPath($pen, $p); $pen.Dispose() }
+                $p.Dispose()
             }
             $code = $TabIcons[$pg.Text]
+            $navColor = if ($sel) { $Theme.Text } else { $Theme.Muted }
             $ix = if ($iconOnly) { $rc.X + 11 } else { $rc.X + 12 }
-            if ($code -and $IconFontName) { $g.DrawImage((Get-IconBitmap $code $white), $ix, ($rc.Y + 8), 16, 16) }
+            if ($code -and $IconFontName) { $g.DrawImage((Get-IconBitmap $code $navColor), $ix, ($rc.Y + 8), 16, 16) }
             if (-not $iconOnly) {
-                [System.Windows.Forms.TextRenderer]::DrawText($g, $pg.Text, $(if ($sel) { $TabFontSel } else { $TabFont }), (New-Object System.Drawing.Rectangle(($rc.X + 34), $rc.Y, ($w - 36), $rc.Height)), $(if ($sel) { $white } else { Get-Alpha 220 $white }),
+                [System.Windows.Forms.TextRenderer]::DrawText($g, $pg.Text, $(if ($sel) { $TabFontSel } else { $TabFont }), (New-Object System.Drawing.Rectangle(($rc.X + 32), $rc.Y, ($w - 34), $rc.Height)), $navColor,
                     [System.Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, NoPadding')
             }
             $x += $w + 4
@@ -349,13 +443,16 @@ $header.Add_Paint({
     $x = $r.Right - 14
     foreach ($chip in @($script:hdrChips)) {
         $w = [System.Windows.Forms.TextRenderer]::MeasureText($chip, $HeaderSub).Width + 14
-        if ($x - $w -lt $navEnd + 10) { break }          # chip chỉ hiện khi còn chỗ
+        if ($x - $w -lt $navEnd + 10) { break }
         $x -= $w
-        $p = New-RoundRect $x 15 $w 26 13
-        $fill = New-Object System.Drawing.SolidBrush((Get-Alpha 48 $white)); $g.FillPath($fill, $p); $fill.Dispose(); $p.Dispose()
-        [System.Windows.Forms.TextRenderer]::DrawText($g, $chip, $HeaderSub, (New-Object System.Drawing.Rectangle([int]$x, 15, [int]$w, 26)), $white, [System.Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine')
+        $p = New-RoundRect $x 15 $w 26 8
+        $fill = New-Object System.Drawing.SolidBrush($Theme.Surface); $g.FillPath($fill, $p); $fill.Dispose()
+        $pen = New-Object System.Drawing.Pen($Theme.Border); $g.DrawPath($pen, $p); $pen.Dispose(); $p.Dispose()
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $chip, $HeaderSub, (New-Object System.Drawing.Rectangle([int]$x, 15, [int]$w, 26)), $Theme.Muted, [System.Windows.Forms.TextFormatFlags]'HorizontalCenter, VerticalCenter, SingleLine')
         $x -= 8
     }
+    $line = New-Object System.Drawing.Pen($Theme.Border)
+    $g.DrawLine($line, 0, ($r.Bottom - 1), $r.Right, ($r.Bottom - 1)); $line.Dispose()
 })
 $header.Add_Resize({ param($s, $e) $s.Invalidate() })
 $script:hdrTabs = @(); $script:hdrHover = -1; $script:hdrIconOnly = $false
@@ -622,7 +719,7 @@ function Set-PgCollapsed([bool]$c) {
 }
 
 # ---------- Mục tiêu hôm nay (góc phải tab Dịch vụ) ----------
-# Lưu ở %APPDATA%\DevOpsPanel\goals.json: danh sách { date, text, done }, giữ 90 ngày
+# Lưu ở %APPDATA%\PegasusPanel\goals.json: danh sách { date, text, done }, giữ 90 ngày
 $GoalsFile = Join-Path $DataDir 'goals.json'
 $script:goals = New-Object System.Collections.ArrayList
 $script:goalsDay = ''
@@ -972,7 +1069,7 @@ $healthSync = [hashtable]::Synchronized(@{ Data = $null; Seq = 0; Run = $true; F
 $healthRs = [runspacefactory]::CreateRunspace()
 $healthRs.Open()
 $healthRs.SessionStateProxy.SetVariable('sync', $healthSync)
-$healthRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'DevOpsCore.ps1')); $healthRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
+$healthRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'PegasusCore.ps1')); $healthRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
 $healthPs = [powershell]::Create()
 $healthPs.Runspace = $healthRs
 [void]$healthPs.AddScript({
@@ -1122,7 +1219,7 @@ $k3sSync = [hashtable]::Synchronized(@{ Data = $null; Seq = 0; Seq0 = 0; Run = $
 $k3sRs = [runspacefactory]::CreateRunspace()
 $k3sRs.Open()
 $k3sRs.SessionStateProxy.SetVariable('sync', $k3sSync)
-$k3sRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'DevOpsCore.ps1')); $k3sRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
+$k3sRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'PegasusCore.ps1')); $k3sRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
 $k3sPs = [powershell]::Create()
 $k3sPs.Runspace = $k3sRs
 [void]$k3sPs.AddScript({
@@ -1181,7 +1278,7 @@ function Update-K3s {
 }
 
 # ---------- Tab Ứng dụng (backend/frontend dev) ----------
-$lblApps = New-Label 'Đang quét các port...' 12 12 160 $pageApps -Bold
+$lblApps = New-Label 'Đang tải ứng dụng...' 12 12 160 $pageApps -Bold
 $lblApps.AutoEllipsis = $true
 # Ô tìm kiếm: lọc theo tên / nhóm / loại / port / trạng thái, nhiều từ = phải khớp tất cả, gõ không dấu cũng được
 $lblSearch = New-Label 'Tìm' 280 12 30 $pageApps
@@ -1199,6 +1296,8 @@ $AppsCols = @(@('Nhóm', 110), @('Ứng dụng', 150), @('Loại', 70), @('Port'
 $script:showStats = [bool]$PanelConfig.showStats
 foreach ($col in $AppsCols[0..$(if ($script:showStats) { 8 } else { 5 })]) { [void]$lvApps.Columns.Add($col[0], $col[1]) }
 $pageApps.Controls.Add($lvApps)
+$ovApps = New-Overlay $lvApps
+Set-Overlay $ovApps 'Đang tải ứng dụng...' $true
 
 # Chọn nhiều dòng (Ctrl/Shift + click, Ctrl+A) -> Start / Stop / Restart cả loạt
 function Get-SelectedApps([switch]$Quiet) {
@@ -1669,7 +1768,7 @@ $lvApps.Add_ColumnClick({
 $script:asyncJobs = New-Object System.Collections.ArrayList
 function Start-CoreAsync([string]$code, [hashtable]$params, [scriptblock]$onDone, [hashtable]$ctx = @{}) {
     $rs = [runspacefactory]::CreateRunspace(); $rs.Open()
-    $rs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'DevOpsCore.ps1')); $rs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
+    $rs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'PegasusCore.ps1')); $rs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
     $rs.SessionStateProxy.SetVariable('p', $params)
     $rs.SessionStateProxy.SetVariable('code', $code)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
@@ -1799,7 +1898,7 @@ $appsSync = [hashtable]::Synchronized(@{ Data = $null; At = [datetime]::MinValue
 $appsRs = [runspacefactory]::CreateRunspace()
 $appsRs.Open()
 $appsRs.SessionStateProxy.SetVariable('sync', $appsSync)
-$appsRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'DevOpsCore.ps1')); $appsRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
+$appsRs.SessionStateProxy.SetVariable('corePath', (Join-Path $PSScriptRoot 'PegasusCore.ps1')); $appsRs.SessionStateProxy.SetVariable('CoreShared', $CoreShared)
 $appsPs = [powershell]::Create()
 $appsPs.Runspace = $appsRs
 [void]$appsPs.AddScript({
@@ -1827,6 +1926,7 @@ function Update-Apps {
     if ($appsSync.Seq -eq $script:appsSeq) { return }
     $script:appsSeq = $appsSync.Seq
     if ($null -eq $appsSync.Data) { return }
+    Set-Overlay $ovApps ''
     $prev = $script:appsData
     $script:appsData = $appsSync.Data
     Watch-AppsCrash $prev $script:appsData
@@ -1948,7 +2048,7 @@ $form.Add_VisibleChanged({ Sync-HealthMode })
 # ---------- Tab Git: tất cả repo trong danh mục ----------
 $lblFlow = New-Label '' 12 6 498 $pageGit
 $lblFlow.Height = 40
-$lblFlow.Text = "Git-flow Sunhouse:  feature/ · fix/ · bugfix/  tách từ main → push → Merge Request vào main`n" +
+$lblFlow.Text = "Git-flow:  feature/ · fix/ · bugfix/  tách từ main → push → Merge Request vào main`n" +
                 "hotfix/  (chỉ khi lỗi đang ảnh hưởng production)  tách từ production → MR vào production → cherry-pick sang main"
 $lblFlow.ForeColor = $Theme.Muted
 $lvRepos = New-Object System.Windows.Forms.ListView
@@ -2129,7 +2229,7 @@ function Show-NewBranchDialog($repos = $null, $after = $null, $afterArg = $null,
     $note.Multiline = $true; $note.ReadOnly = $true; $note.TabStop = $false; $note.ScrollBars = 'Vertical'
     $note.Location = New-Object System.Drawing.Point(14, 116); $note.Size = New-Object System.Drawing.Size(596, 290)
     $note.Text = @"
-QUY TRÌNH GIT-FLOW SUNHOUSE (chỉ có 2 nhánh dài hạn: main và production, KHÔNG dùng dev)
+QUY TRÌNH GIT-FLOW (chỉ có 2 nhánh dài hạn: main và production, KHÔNG dùng dev)
 
 • feature/  ·  fix/  ·  bugfix/
    1. Tách từ main bản mới nhất (panel tự fetch rồi tách từ origin/main)
@@ -2722,7 +2822,7 @@ function Invoke-CommitNow($cs, [bool]$push) {
     if (-not $cs.LvS.Items.Count) { Set-CommitStatus $cs 'Chưa có file nào được stage (chọn file ở trên rồi bấm ↓ Stage).'; return }
     if ($cs.ChkNoAccent.Checked) { $m = ConvertTo-NoDiacritics $m }
     if ($cs.Branch -in 'main', 'production') {
-        $ans = [System.Windows.Forms.MessageBox]::Show("Đang ở nhánh $($cs.Branch).`nQuy trình Sunhouse: mọi thay đổi vào main / production phải qua Merge Request, không commit thẳng.`n`nYes = tạo nhánh mới trước (mang theo các thay đổi)`nNo = vẫn commit lên $($cs.Branch)`nCancel = huỷ", 'Commit', 'YesNoCancel', 'Warning')
+        $ans = [System.Windows.Forms.MessageBox]::Show("Đang ở nhánh $($cs.Branch).`nMọi thay đổi vào main / production phải qua Merge Request, không commit thẳng.`n`nYes = tạo nhánh mới trước (mang theo các thay đổi)`nNo = vẫn commit lên $($cs.Branch)`nCancel = huỷ", 'Commit', 'YesNoCancel', 'Warning')
         if ($ans -eq 'Yes') { Show-CommitNewBranch $cs; return }
         if ($ans -ne 'No') { return }
     }
@@ -2798,7 +2898,7 @@ function Invoke-ProjectScan {
     $roots = @($PanelConfig.scanRoots)
     if (-not $roots.Count) {
         $tabs.SelectedTab = $pageSettings
-        Set-Status 'Chưa có thư mục gốc để quét - thêm ở tab Cài đặt (vd E:\SUNHOUSE\supperapp).'
+        Set-Status 'Chưa có thư mục gốc để quét - thêm ở tab Cài đặt (vd E:\Projects\apps).'
         return
     }
     $form.Cursor = 'WaitCursor'; Set-Status 'Đang quét project...'; [System.Windows.Forms.Application]::DoEvents()
@@ -2810,7 +2910,7 @@ function Invoke-ProjectScan {
     $appsSync.Kick = $true
 }
 
-$gGeneral = New-Group 'Chung (tên hiển thị · giao diện · menu)' 10 104 $pageSettings
+$gGeneral = New-Group 'Cá nhân hóa' 10 104 $pageSettings
 New-Label 'Tên hiển thị' 12 30 110 $gGeneral | Out-Null
 $txtName = New-Object System.Windows.Forms.TextBox
 $txtName.Location = New-Object System.Drawing.Point(125, 27); $txtName.Size = New-Object System.Drawing.Size(150, 26)
@@ -2824,7 +2924,7 @@ New-Button 'Đổi tên' 281 24 80 $gGeneral {
     $script:AppName = $new
     $form.Text = "$new  v$PanelVersion"
     $tray.Text = $(if ($new.Length -gt 60) { $new.Substring(0, 60) } else { $new })
-    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DevOpsPanel'
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PegasusPanel'
     if (Test-Path $uninstallKey) { Set-ItemProperty $uninstallKey -Name DisplayName -Value $new }
     Set-Status "Đã đổi tên thành '$new' (cửa sổ, khay hệ thống, shortcut)."
 } | Out-Null
@@ -2853,8 +2953,28 @@ $cbNav.Add_SelectedIndexChanged({
     Set-Status ('Menu tab: ' + $cbNav.SelectedItem)
 })
 $gGeneral.Controls.Add($cbNav)
+$chkNoLockSleep = New-Object System.Windows.Forms.CheckBox
+$chkNoLockSleep.Location = New-Object System.Drawing.Point(365, 63); $chkNoLockSleep.Size = New-Object System.Drawing.Size(140, 26)
+$chkNoLockSleep.Text = 'Bỏ khóa sau Sleep'; $chkNoLockSleep.Checked = [bool]$PanelConfig.noLockOnSleep
+$gGeneral.Controls.Add($chkNoLockSleep)
+$chkNoLockSleep.Add_CheckedChanged({
+    $previous = [bool]$PanelConfig.noLockOnSleep
+    if ($chkNoLockSleep.Checked -eq $previous) { return }
+    try {
+        Set-SleepLockPreference $chkNoLockSleep.Checked
+        $PanelConfig.noLockOnSleep = $chkNoLockSleep.Checked
+        Save-PanelConfig $PanelConfig
+        Set-Status $(if ($chkNoLockSleep.Checked) { 'Sleep: Windows sẽ không yêu cầu mở khóa khi thức dậy.' } else { 'Sleep: yêu cầu mở khóa khi thức dậy.' })
+    } catch {
+        $chkNoLockSleep.Checked = $previous
+        Set-Status "Không đổi được cài đặt khóa Sleep: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Không đổi được cài đặt khóa sau Sleep:`n$($_.Exception.Message)", 'Cài đặt Sleep', 'OK', 'Warning') | Out-Null
+    }
+})
+$sleepLockTip = New-Object System.Windows.Forms.ToolTip
+$sleepLockTip.SetToolTip($chkNoLockSleep, 'Bật: không yêu cầu đăng nhập sau khi thức dậy. Tắt: giữ hành vi khóa hiện tại của Windows.')
 
-$gWsl = New-Group 'WSL / PostgreSQL (áp dụng sau khi mở lại panel)' 122 100 $pageSettings
+$gWsl = New-Group 'WSL & PostgreSQL' 122 100 $pageSettings
 New-Label 'Distro WSL' 12 30 110 $gWsl | Out-Null
 $cbDistro = New-Object System.Windows.Forms.ComboBox
 $cbDistro.DropDownStyle = 'DropDownList'
@@ -2871,39 +2991,39 @@ $numPg.Maximum = 65535; $numPg.Value = [int]$PanelConfig.pgUbuntuPort
 $gWsl.Controls.Add($numPg)
 New-Label '0 = không dùng PostgreSQL trong WSL' 235 64 270 $gWsl | Out-Null
 
-$gScan = New-Group 'Tab Ứng dụng: thư mục gốc để quét project' 230 250 $pageSettings
+$gScan = New-Group 'Ứng dụng · thư mục quét' 230 250 $pageSettings
 $lbRoots = New-Object System.Windows.Forms.ListBox
 $lbRoots.Location = New-Object System.Drawing.Point(12, 26); $lbRoots.Size = New-Object System.Drawing.Size(360, 110)
 foreach ($r in $PanelConfig.scanRoots) { [void]$lbRoots.Items.Add($r) }
 $gScan.Controls.Add($lbRoots)
-New-Button 'Thêm thư mục...' 380 26 118 $gScan {
+$btnAddScanRoot = New-Button 'Thêm thư mục...' 380 26 118 $gScan {
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = 'Chọn thư mục chứa các project (vd E:\SUNHOUSE\supperapp)'
+    $dlg.Description = 'Chọn thư mục chứa các project (vd E:\Projects\apps)'
     if ($dlg.ShowDialog() -eq 'OK' -and -not $lbRoots.Items.Contains($dlg.SelectedPath)) { [void]$lbRoots.Items.Add($dlg.SelectedPath) }
-} | Out-Null
-New-Button 'Xoá' 380 62 118 $gScan { if ($lbRoots.SelectedItem) { $lbRoots.Items.Remove($lbRoots.SelectedItem) } } | Out-Null
-New-Button 'Sửa apps.json' 380 98 118 $gScan { Start-Process notepad.exe $AppsFile } | Out-Null
-New-Label 'Dải port tự phát hiện app đang chạy' 12 146 250 $gScan | Out-Null
+}
+$btnRemoveScanRoot = New-Button 'Xoá' 380 62 118 $gScan { if ($lbRoots.SelectedItem) { $lbRoots.Items.Remove($lbRoots.SelectedItem) } }
+$btnEditApps = New-Button 'Sửa apps.json' 380 98 118 $gScan { Start-Process notepad.exe $AppsFile }
+$lblPortRanges = New-Label 'Dải port tự phát hiện app đang chạy' 12 146 280 $gScan
 $txtRanges = New-Object System.Windows.Forms.TextBox
-$txtRanges.Location = New-Object System.Drawing.Point(265, 143); $txtRanges.Size = New-Object System.Drawing.Size(233, 26)
+$txtRanges.Location = New-Object System.Drawing.Point(300, 143); $txtRanges.Size = New-Object System.Drawing.Size(198, 26)
 $txtRanges.Text = ((Get-AppsConfig).Ranges | ForEach-Object { "$($_[0])-$($_[1])" }) -join ', '
 $gScan.Controls.Add($txtRanges)
-$lblScanHint = New-Label 'Tìm project .NET (đọc launchSettings.json) và Vite (đọc port trong vite.config). App thêm tay trong apps.json với "manual": true được giữ nguyên khi quét lại.' 12 178 486 $gScan
+$lblScanHint = New-Label 'Tìm project .NET và Vite trong các thư mục đã chọn. Mục thêm tay trong apps.json được giữ lại khi quét.' 12 178 486 $gScan
 $lblScanHint.Size = New-Object System.Drawing.Size(486, 36); $lblScanHint.ForeColor = $Theme.Muted
-New-Button 'Lưu và quét ngay' 12 212 160 $gScan { Save-SettingsTab; Invoke-ProjectScan } | Out-Null
-New-Button 'Xuất danh mục…' 180 212 150 $gScan {
+$btnScanNow = New-Button 'Lưu và quét ngay' 12 212 160 $gScan { Save-SettingsTab; Invoke-ProjectScan }
+$btnExportApps = New-Button 'Xuất danh mục…' 180 212 150 $gScan {
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'Danh mục app (*.json)|*.json'; $dlg.FileName = "devops-apps-$($env:COMPUTERNAME.ToLower()).json"
     if ($dlg.ShowDialog() -eq 'OK') { try { Set-Status (Export-AppsCatalog $dlg.FileName) } catch { Set-Status "Lỗi: $($_.Exception.Message)" } }
-} | Out-Null
-New-Button 'Nhập danh mục…' 338 212 150 $gScan {
+}
+$btnImportApps = New-Button 'Nhập danh mục…' 338 212 150 $gScan {
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = 'Danh mục app (*.json)|*.json'
     if ($dlg.ShowDialog() -ne 'OK') { return }
     try { $msg = Import-AppsCatalog $dlg.FileName; Set-Status $msg; [System.Windows.Forms.MessageBox]::Show($msg, 'Nhập danh mục', 'OK', 'Information') | Out-Null }
     catch { [System.Windows.Forms.MessageBox]::Show("Không nhập được: $($_.Exception.Message)", 'Nhập danh mục', 'OK', 'Warning') | Out-Null }
     $appsSync.Kick = $true
-} | Out-Null
+}
 
 function Save-SettingsTab {
     $PanelConfig.distro = $(if ($cbDistro.SelectedItem -and $cbDistro.SelectedItem -ne '(tự chọn)') { [string]$cbDistro.SelectedItem } else { '' })
@@ -2915,11 +3035,11 @@ function Save-SettingsTab {
     if ($ranges.Count) { Save-AppsConfig $ranges (Get-AppsConfig).Apps }
 }
 
-New-Button 'Lưu và mở lại panel' 6 490 200 $pageSettings {
+$btnSaveSettings = New-Button 'Lưu và mở lại panel' 6 490 200 $pageSettings {
     Save-SettingsTab
     $script:restartRequested = $true; $script:exiting = $true; $form.Close()
-} | Out-Null
-New-Button 'Chẩn đoán tốc độ' 212 490 150 $pageSettings {
+}
+$btnPerf = New-Button 'Chẩn đoán tốc độ' 212 490 150 $pageSettings {
     Set-Status 'Đang đo từng bước (có thể mất 10-30 giây)...'
     $form.Cursor = 'AppStarting'
     Start-CoreAsync 'Get-PerfDiagnostics' @{} {
@@ -2930,9 +3050,41 @@ New-Button 'Chẩn đoán tốc độ' 212 490 150 $pageSettings {
         Set-Status 'Đã đo xong - kết quả đã copy vào clipboard.'
         [System.Windows.Forms.MessageBox]::Show($txt + "`r`n`r`n(Đã copy vào clipboard)", 'Chẩn đoán tốc độ', 'OK', 'Information') | Out-Null
     }
-} | Out-Null
+}
 $lblDataDir = New-Label "Dữ liệu: $DataDir" 370 496 145 $pageSettings
 $lblDataDir.ForeColor = $Theme.Muted; $lblDataDir.AutoEllipsis = $true
+
+function Set-SettingsLayout {
+    $pageWidth = $pageSettings.ClientSize.Width
+    $contentWidth = [math]::Max(510, [math]::Min(1120, ($pageWidth - 24)))
+    $left = [math]::Max(6, [int](($pageWidth - $contentWidth) / 2))
+    if ($contentWidth -ge 1050) {
+        $columnWidth = [int](($contentWidth - 14) / 2)
+        $gGeneral.SetBounds($left, 10, $columnWidth, 104)
+        $gWsl.SetBounds(($left + $columnWidth + 14), 10, $columnWidth, 100)
+        $scanTop = 122; $actionTop = 390
+    } else {
+        $gGeneral.SetBounds($left, 10, $contentWidth, 104)
+        $gWsl.SetBounds($left, 122, $contentWidth, 100)
+        $scanTop = 230; $actionTop = 490
+    }
+    $gScan.SetBounds($left, $scanTop, $contentWidth, 250)
+    $listWidth = [math]::Max(180, ($contentWidth - 166))
+    $lbRoots.SetBounds(12, 26, $listWidth, 110)
+    $actionX = 22 + $listWidth
+    $btnAddScanRoot.SetBounds($actionX, 26, 118, 32)
+    $btnRemoveScanRoot.SetBounds($actionX, 62, 118, 32)
+    $btnEditApps.SetBounds($actionX, 98, 118, 32)
+    $lblPortRanges.SetBounds(12, 146, 280, 24)
+    $txtRanges.SetBounds(300, 143, [math]::Max(150, ($contentWidth - 312)), 26)
+    $lblScanHint.SetBounds(12, 178, [math]::Max(200, ($contentWidth - 24)), 36)
+    $x = 12
+    foreach ($button in @($btnScanNow, $btnExportApps, $btnImportApps)) { $button.Left = $x; $button.Top = 212; $x += $button.Width + 8 }
+    $btnSaveSettings.SetBounds($left, $actionTop, 200, 32)
+    $btnPerf.SetBounds(($left + 208), $actionTop, 150, 32)
+    $lblDataDir.SetBounds(($left + 370), ($actionTop + 5), [math]::Max(80, ($contentWidth - 376)), 24)
+}
+$pageSettings.Add_Resize({ Set-SettingsLayout })
 
 # ---------- Tab Trợ giúp ----------
 $lblHelpTitle = New-Label $AppName 12 10 490 $pageHelp
@@ -2998,7 +3150,7 @@ DỊCH VỤ
 
 GIT
   Tất cả repo trong danh mục: nhánh, chậm/nhanh hơn remote (↓ ↑), số file sửa; Fetch / Pull nhiều repo một lúc.
-  Tạo nhánh theo git-flow Sunhouse:
+  Tạo nhánh theo git-flow:
     feature/ · fix/ · bugfix/  tách từ main → Push + MR → Merge Request vào main
     hotfix/ (chỉ lỗi gấp trên production)  tách từ production → MR vào production → cherry-pick sang main
   Chọn 1 repo để xem lịch sử commit dạng graph (tất cả nhánh hoặc nhánh hiện tại): mỗi nhánh một màu riêng,
@@ -3010,16 +3162,14 @@ GIT
     Nút "⎇ Nhánh mới…" trong màn hình Commit: tạo nhánh mới mang theo các file đang sửa (lỡ sửa trên main).
 
 AI CODE
-  Làm việc với Claude Code, Codex hoặc Gemini CLI ngay trong panel (cần cài CLI tương ứng, bấm "Cài / cập nhật CLI").
-  • Chip thư mục ở thanh trên: chọn repo / thư mục project. Chip trong ô soạn: công cụ (Claude / Codex / Gemini), quyền, model.
-  • Quyền: Chỉ đọc = hỏi đáp / lên kế hoạch; Cho phép sửa file = AI sửa code trong thư mục; Toàn quyền = sửa file + chạy lệnh.
-  • Gõ yêu cầu, Enter để gửi (Shift+Enter xuống dòng). Các lượt sau tiếp tục cùng phiên; "Phiên mới" để bắt đầu lại;
-    nút tròn chuyển thành ■ khi AI đang chạy - bấm để dừng. Dòng "▸ đọc 2 file, sửa 1 file" bấm vào để xem chi tiết.
-  • Dải phía trên ô soạn: nhánh git, số dòng thêm / bớt; bấm "Xem thay đổi / Commit" để review diff rồi commit.
-  • "Xem thay đổi / Commit…" mở màn hình Commit để review diff của AI rồi commit / push.
-  • "Mở terminal" mở CLI ở chế độ tương tác (đăng nhập lần đầu, hoặc tiếp tục phiên đang chat).
+  Lần đầu mở tab: chọn Claude Code, Codex, Gemini CLI hoặc DeepSeek Code.
+  • Claude / Codex / Gemini chạy trong panel; danh sách Phiên được lưu và nhóm theo thư mục để tiếp tục.
+  • DeepSeek Code mở Deep Code CLI trong terminal; cần cài CLI và cấu hình API key riêng.
+  • Chip thư mục chọn project. Chip công cụ / quyền / model nằm cạnh ô soạn; Enter gửi, Shift+Enter xuống dòng.
+  • Quyền: Chỉ đọc, Cho sửa file hoặc Toàn quyền. Nút tròn chuyển thành ■ khi AI chạy; bấm để dừng.
+  • Dải phía trên ô soạn hiển thị nhánh git và thay đổi; "Xem thay đổi / Commit" để review diff.
+  • "Mở terminal" tiếp tục phiên CLI đang chọn. "Phiên mới" bắt đầu phiên mới.
   Từ tab Git: chuột phải repo → "Code với AI tại repo này".
-
 SỨC KHỎE
   CPU, RAM, WSL, pin, mạng, tiến trình nặng nhất. Cảnh báo hiện ở khay hệ thống.
 
@@ -3111,20 +3261,22 @@ New-Button 'Thư mục dữ liệu' 294 448 140 $pageHelp { Start-Process explor
 # Lượt sau nối tiếp phiên cũ bằng session id CLI trả về; "Mở terminal" mở đúng phiên đó ở chế độ tương tác.
 $AiTools = [ordered]@{
     claude = @{ Name = 'Claude Code'; Exe = 'claude'; Color = (New-Rgb 217 119 87); Pkg = '@anthropic-ai/claude-code'; Models = @('sonnet', 'opus', 'haiku') }
-    codex  = @{ Name = 'Codex';       Exe = 'codex';  Color = (New-Rgb 16 163 127); Pkg = '@openai/codex';            Models = @() }
+    codex  = @{ Name = 'Codex';       Exe = 'codex';  Color = (New-Rgb 16 163 127); Pkg = '@openai/codex';            Models = @('gpt-5.5') }
     gemini = @{ Name = 'Gemini CLI';  Exe = 'gemini'; Color = (New-Rgb 66 133 244); Pkg = '@google/gemini-cli';       Models = @('gemini-2.5-pro', 'gemini-2.5-flash') }
 }
 $AiModes = @('plan', 'edit', 'full')
-$AiFont = New-Object System.Drawing.Font('Segoe UI', 10.5)
+$AiFont = New-Object System.Drawing.Font('Segoe UI', 11.5)
 $AiHead = New-Object System.Drawing.Font('Segoe UI Semibold', 11.5)
-$AiMonoSmall = New-Object System.Drawing.Font('Consolas', 9)
+$AiMonoSmall = New-Object System.Drawing.Font('Consolas', 10)
 $AiBold = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
-$AiSmall = New-Object System.Drawing.Font('Segoe UI', 9)
-$AiMono = New-Object System.Drawing.Font('Consolas', 9.5)
+$AiSmall = New-Object System.Drawing.Font('Segoe UI', 10)
+$AiMono = New-Object System.Drawing.Font('Consolas', 10.5)
 $script:ai = @{ Key = ''; Session = $null; FullOk = $false; Buf = ''; Title = $null }
 $script:aiRun = $null
+$script:aiFile = $null
 
 function Find-AiExe([string]$name) {
+    if ($name -eq 'codex' -and (Test-Path "$env:APPDATA\npm\codex.cmd")) { return "$env:APPDATA\npm\codex.cmd" }
     $c = Get-Command "$name.exe", "$name.cmd" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($c) { return $c.Source }
     Find-FirstPath @("$env:APPDATA\npm\$name.cmd", "$env:USERPROFILE\.local\bin\$name.exe")
@@ -3140,10 +3292,11 @@ function Get-AiArgs([string]$tool, [string]$mode, [string]$model, [string]$sessi
         }
         'codex' {
             if ($Interactive) { if ($session) { [void]$a.AddRange(@('resume', $session)) }; break }
-            [void]$a.AddRange(@('exec', '--json', '--skip-git-repo-check'))
-            [void]$a.AddRange(@{ plan = @('-s', 'read-only'); edit = @('--full-auto'); full = @('--dangerously-bypass-approvals-and-sandbox') }[$mode])
-            if ($model) { [void]$a.AddRange(@('-m', $model)) }
+            [void]$a.Add('exec')
             if ($session) { [void]$a.AddRange(@('resume', $session)) }
+            [void]$a.AddRange(@('--json', '--skip-git-repo-check'))
+            [void]$a.AddRange(@{ plan = @('--sandbox', 'read-only'); edit = @('--sandbox', 'workspace-write'); full = @('--dangerously-bypass-approvals-and-sandbox') }[$mode])
+            if ($model) { [void]$a.AddRange(@('-m', $model)) }
             [void]$a.Add('-')                          # đọc prompt từ stdin
         }
         'gemini' {
@@ -3189,7 +3342,11 @@ function Add-AiRun([string]$text, $color, $fnt, [int]$indent = 0, [switch]$NoLog
         if (-not $last -or $last.Kind -ne 'md') {
             $r = New-Object System.Windows.Forms.RichTextBox
             $r.Name = 'bg:Back'; $r.BackColor = $Theme.Back; $r.BorderStyle = 'None'; $r.ReadOnly = $true; $r.ScrollBars = 'None'
-            $r.DetectUrls = $true; $r.WordWrap = $true; $r.Font = $AiFont; $r.TabStop = $false; $r.Width = 600
+            $r.DetectUrls = $true; $r.WordWrap = $true; $r.Font = $AiFont; $r.TabStop = $true; $r.Width = 600
+            $menu = New-Object System.Windows.Forms.ContextMenuStrip
+            [void]$menu.Items.Add('Sao chép', $null, { param($s, $e) $s.Owner.SourceControl.Copy() })
+            [void]$menu.Items.Add('Sao chép toàn bộ', $null, { param($s, $e) $s.Owner.SourceControl.SelectAll(); $s.Owner.SourceControl.Copy() })
+            $r.ContextMenuStrip = $menu
             $r.Tag = @{ H = 20; Runs = New-Object System.Collections.ArrayList }
             $r.Add_ContentsResized({ param($s, $e) if ($s.Tag.H -ne $e.NewRectangle.Height) { $s.Tag.H = $e.NewRectangle.Height; Update-AiLayout -Scroll:$script:aiStick } })
             $r.Add_LinkClicked({ param($s, $e) Start-Process $e.LinkText })
@@ -3221,8 +3378,14 @@ function Add-AiUser([string]$text) {
         $path = New-RoundRect 0 0 ($s.Width - 1) ($s.Height - 1) 14
         $b = New-Object System.Drawing.SolidBrush($Theme.Sel); $g.FillPath($b, $path); $b.Dispose(); $path.Dispose()
     })
-    $l = New-AiLabel $text 'Text' $AiFont
-    $l.Name = 'bg:Sel'; $l.BackColor = $Theme.Sel
+    $l = New-Object System.Windows.Forms.RichTextBox
+    $l.Name = 'bg:Sel'; $l.BackColor = $Theme.Sel; $l.ForeColor = $Theme.Text; $l.BorderStyle = 'None'; $l.ReadOnly = $true
+    $l.DetectUrls = $true; $l.WordWrap = $true; $l.ScrollBars = 'None'; $l.Font = $AiFont; $l.Text = $text; $l.TabStop = $true
+    $l.Add_LinkClicked({ param($s, $e) Start-Process $e.LinkText })
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    [void]$menu.Items.Add('Sao chép', $null, { param($s, $e) $s.Owner.SourceControl.Copy() })
+    [void]$menu.Items.Add('Sao chép toàn bộ', $null, { param($s, $e) $s.Owner.SourceControl.SelectAll(); $s.Owner.SourceControl.Copy() })
+    $l.ContextMenuStrip = $menu
     $p.Controls.Add($l)
     Add-AiItem 'user' $p
 }
@@ -3270,7 +3433,13 @@ function Update-AiActivity($p) {
     $st.Dt.Visible = $st.Open
 }
 # Xếp các phần tử vào cột giữa (rộng tối đa 780px), cuộn theo nội dung
-function Get-AiCol { $w = $aiChat.ClientSize.Width; $cw = [math]::Max(240, [math]::Min(780, $w - 64)); @([int](($w - $cw) / 2), [int]$cw) }
+function Get-AiCol {
+    $w = $aiChat.ClientSize.Width
+    $left = if ($script:aiSide -and $script:aiSide.Visible) { $script:aiSide.Width } else { 0 }
+    $available = [math]::Max(240, $w - $left)
+    $cw = [math]::Max(240, [math]::Min(780, $available - 64))
+    @([int]($left + ($available - $cw) / 2), [int]$cw)
+}
 function Update-AiLayout([switch]$Scroll) {
     if ($script:aiLaying) { $script:aiRelayout = $true; return }
     $script:aiLaying = $true
@@ -3297,9 +3466,9 @@ function Update-AiLayout([switch]$Scroll) {
             switch ($it.Kind) {
                 'user' {
                     $l = $c.Controls[0]
-                    $l.MaximumSize = New-Object System.Drawing.Size(([int]($cw * 0.8) - 32), 0)
-                    $sz = $l.PreferredSize
-                    $l.Location = New-Object System.Drawing.Point(16, 10)
+                    $maxW = [int]($cw * 0.8) - 32
+                    $sz = [System.Windows.Forms.TextRenderer]::MeasureText($l.Text, $l.Font, (New-Object System.Drawing.Size($maxW, 0)), [System.Windows.Forms.TextFormatFlags]'WordBreak, TextBoxControl')
+                    $l.SetBounds(16, 10, $sz.Width, $sz.Height)
                     $c.SetBounds(($cx + $cw - $sz.Width - 32), ($oy + $y), ($sz.Width + 32), ($sz.Height + 20))
                 }
                 'md' { $c.SetBounds($cx, ($oy + $y), $cw, ([math]::Max(18, [int]$c.Tag.H) + 4)) }
@@ -3329,7 +3498,7 @@ function Update-AiTheme {
         foreach ($x in @($r.Tag.Runs)) { Add-AiRun $x[0] $x[1] $x[2] $x[3] -NoLog -rtb $r }
     }
     Update-AiChips
-    foreach ($c in @($aiTop, $aiCtx, $aiInBox)) { $c.Invalidate() }
+    foreach ($c in @($aiTop, $aiCtx, $aiInBox, $aiChooser)) { if ($c) { $c.Invalidate() } }
 }
 function Add-AiInline([string]$line, [int]$indent) {
     foreach ($part in [regex]::Split($line, '(\*\*[^*]+\*\*|`[^`]+`)')) {
@@ -3372,7 +3541,7 @@ function Get-AiId([string]$id) { $id.Substring(0, [math]::Min(8, $id.Length)) }
 function Show-ClaudeEvent($j) {
     switch ($j.type) {
         'system' {
-            if ($j.subtype -eq 'init' -and $j.session_id) { $script:ai.Session = $j.session_id }
+            if ($j.subtype -eq 'init' -and $j.session_id) { $script:ai.Session = $j.session_id; Save-AiSession }
         }
         'assistant' {
             foreach ($c in @($j.message.content)) {
@@ -3384,7 +3553,7 @@ function Show-ClaudeEvent($j) {
             foreach ($c in @($j.message.content)) { if ($c.type -eq 'tool_result' -and $c.is_error) { Add-AiError (Get-AiShort $c.content) } }
         }
         'result' {
-            if ($j.session_id) { $script:ai.Session = $j.session_id }
+            if ($j.session_id) { $script:ai.Session = $j.session_id; Save-AiSession }
             $info = @("$([math]::Round([double]$j.duration_ms / 1000))s")
             if ($j.num_turns) { $info += "$($j.num_turns) lượt" }
             if ($j.total_cost_usd) { $info += ('${0:0.000}' -f [double]$j.total_cost_usd) }
@@ -3399,12 +3568,12 @@ function Show-CodexEvent($j) {
         switch ($j.msg.type) {
             'agent_message' { Add-AiMarkdown $j.msg.message }
             'exec_command_begin' { Add-AiTool 'Chạy lệnh' (Get-AiShort (@($j.msg.command) -join ' ')) }
-            'error' { Add-AiError $j.msg.message }
+            'error' { Add-AiError (Get-CodexErrorText $j.msg.message) }
         }
         return
     }
     switch ($j.type) {
-        'thread.started' { $script:ai.Session = $j.thread_id }
+        'thread.started' { $script:ai.Session = $j.thread_id; Save-AiSession }
         'item.started' { if ($j.item.type -eq 'command_execution') { Add-AiTool 'Chạy lệnh' (Get-AiShort $j.item.command) } }
         'item.completed' {
             $it = $j.item
@@ -3415,13 +3584,19 @@ function Show-CodexEvent($j) {
                 'file_change' { Add-AiTool 'Sửa file' ((@($it.changes) | ForEach-Object { "$($_.kind) $(Get-AiRel $_.path)" }) -join ', ') }
                 'mcp_tool_call' { Add-AiTool "$($it.server) · $($it.tool)" '' }
                 'web_search' { Add-AiTool 'Tìm web' $it.query }
-                'error' { Add-AiError $it.message }
+                'error' { Add-AiError (Get-CodexErrorText $it.message) }
             }
         }
         'turn.completed' { $u = $j.usage; Add-AiNote ('✓ Xong' + $(if ($u) { " · $($u.input_tokens) token vào · $($u.output_tokens) token ra" } else { '' })) }
-        'turn.failed' { Add-AiError $j.error.message }
-        'error' { Add-AiError $j.message }
+        'turn.failed' { Add-AiError (Get-CodexErrorText $j.error.message) }
+        'error' { Add-AiError (Get-CodexErrorText $j.message) }
     }
+}
+function Get-CodexErrorText([string]$message) {
+    if ($message -match '^\s*\{') {
+        try { $j = $message | ConvertFrom-Json; if ($j.error.message) { return [string]$j.error.message }; if ($j.message) { return [string]$j.message } } catch { }
+    }
+    $message
 }
 function Show-GeminiEvent($j) {
     if ($j.type -eq 'message') {
@@ -3430,7 +3605,7 @@ function Show-GeminiEvent($j) {
     }
     Flush-AiBuffer
     switch ($j.type) {
-        'init' { if ($j.session_id) { $script:ai.Session = $j.session_id } }
+        'init' { if ($j.session_id) { $script:ai.Session = $j.session_id; Save-AiSession } }
         'tool_use' { Add-AiTool $j.tool_name (Get-AiToolSummary $j.parameters) }
         'tool_result' { if ($j.status -eq 'error') { Add-AiError (Get-AiShort $(if ($j.error.message) { $j.error.message } else { $j.output })) } }
         'error' { Add-AiError $j.message }
@@ -3522,12 +3697,50 @@ $btnAiMore = New-AiChip '•••' $aiTop {
     $items += @{ Text = 'Cài / cập nhật CLI…'; Click = { Install-AiCli } }
     Show-AiMenu $btnAiMore $items
 }
+$btnAiSessions = New-AiChip 'Phiên ▾' $aiTop { Show-AiSessions $btnAiSessions }
+$btnAiSwitch = New-AiChip 'Chọn AI' $aiTop { Show-AiPicker }
 function Update-AiTop {
-    $lblAiTitle.MaximumSize = New-Object System.Drawing.Size([math]::Max(100, $aiTop.Width - 520), 0); $lblAiTitle.AutoEllipsis = $true
+    $rightWidth = ($btnAiMore.Width + $btnAiTerm.Width + $btnAiNew.Width + $btnAiSessions.Width + $btnAiSwitch.Width + 24)
+    $titleWidth = [math]::Max(110, $aiTop.Width - $rightWidth - $btnAiDir.Width - 70)
+    $lblAiTitle.MaximumSize = New-Object System.Drawing.Size($titleWidth, 0); $lblAiTitle.AutoEllipsis = $true
     $lblAiTitle.Location = New-Object System.Drawing.Point(22, [int](($aiTop.Height - $lblAiTitle.Height) / 2))
     $btnAiDir.Location = New-Object System.Drawing.Point(($lblAiTitle.Right + 10), [int](($aiTop.Height - $btnAiDir.Height) / 2))
     $x = $aiTop.Width - 16
-    foreach ($b in @($btnAiMore, $btnAiTerm, $btnAiNew)) { $x -= $b.Width; $b.Location = New-Object System.Drawing.Point($x, [int](($aiTop.Height - $b.Height) / 2)); $x -= 4 }
+    foreach ($b in @($btnAiMore, $btnAiTerm, $btnAiNew, $btnAiSessions, $btnAiSwitch)) { $x -= $b.Width; $b.Location = New-Object System.Drawing.Point($x, [int](($aiTop.Height - $b.Height) / 2)); $x -= 4 }
+}
+function Update-AiSessionsButton {
+    $count = @($PanelConfig.aiSessions).Count
+    $btnAiSessions.Text = $(if ($count) { "Phiên ($count) ▾" } else { 'Phiên ▾' })
+    Update-AiTop
+}
+function Open-AiSession($entry) {
+    if (-not $entry -or $entry.Tool -notin $AiTools.Keys -or $entry.Id -notmatch '^[\w.:-]+$' -or -not (Test-Path $entry.Dir)) { return }
+    $script:aiWorkspace = $true; $script:aiShown = $true; $aiChooser.Visible = $false
+    foreach ($c in @($aiTop, $aiChat, $aiBottom)) { $c.Visible = $true }
+    $cbAiTool.SelectedIndex = @($AiTools.Keys).IndexOf([string]$entry.Tool)
+    $script:ai.Session = [string]$entry.Id; $script:ai.Key = "$($entry.Tool)|$($entry.Dir)"; $script:ai.Title = [string]$entry.Title; $script:ai.FullOk = $false
+    Update-AiDirs ([string]$entry.Dir)
+    Clear-AiChat; Show-AiWelcome
+    Add-AiNote "Đang tiếp tục phiên: $($entry.Title) · $(Split-Path $entry.Dir -Leaf). Các lượt trước vẫn nằm trong lịch sử CLI."
+    Update-AiChips; Update-AiTop; Update-AiLayout
+    Set-Status "Đã mở phiên $($entry.Title). Gửi yêu cầu mới để tiếp tục."
+}
+function Show-AiSessions($btn) {
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    $groups = @($PanelConfig.aiSessions | Where-Object { $_.Tool -in $AiTools.Keys -and $_.Id -match '^[\w.:-]+$' -and (Test-Path $_.Dir) } | Group-Object Dir | Sort-Object Name)
+    foreach ($group in $groups) {
+        $folder = New-Object System.Windows.Forms.ToolStripMenuItem((Split-Path $group.Name -Leaf))
+        $folder.ToolTipText = $group.Name
+        foreach ($entry in @($group.Group | Sort-Object Updated -Descending)) {
+            $date = try { ([datetime]$entry.Updated).ToString('MM-dd HH:mm') } catch { '' }
+            $item = New-ThemedMenuItem ("$([string]$entry.Title)  ·  $date") { param($s, $e) Open-AiSession $s.Tag }
+            $item.Tag = $entry; [void]$folder.DropDownItems.Add($item)
+        }
+        [void]$menu.Items.Add($folder)
+    }
+    if (-not $groups.Count) { $empty = New-Object System.Windows.Forms.ToolStripMenuItem('Chưa có phiên đã lưu'); $empty.Enabled = $false; [void]$menu.Items.Add($empty) }
+    Set-MenuTheme $menu $Theme $Theme ($script:ThemeName -eq 'dark')
+    $menu.Show($btn, (New-Object System.Drawing.Point(0, $btn.Height)))
 }
 $aiTop.Add_Resize({ Update-AiTop })
 
@@ -3603,6 +3816,21 @@ $txtAiIn.Add_TextChanged({
 })
 $txtAiIn.Add_GotFocus({ $aiInBox.Invalidate() }); $txtAiIn.Add_LostFocus({ $aiInBox.Invalidate() })
 $txtAiIn.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Enter' -and -not $e.Shift) { $e.SuppressKeyPress = $true; Send-AiPrompt } })
+$btnAiFile = New-AiChip '+' $aiInBox {
+    if ($script:aiFile) { $script:aiFile = $null; Update-AiChips; return }
+    $dir = Get-AiDir
+    if (-not $dir -or -not (Test-Path $dir)) { Set-Status 'Chọn thư mục workspace trước khi chọn file.'; return }
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = 'Chọn file trong workspace'; $dlg.InitialDirectory = $dir; $dlg.CheckFileExists = $true; $dlg.Multiselect = $false
+    if ($dlg.ShowDialog($form) -eq 'OK') {
+        $root = [IO.Path]::GetFullPath($dir).TrimEnd('\') + '\'
+        $path = [IO.Path]::GetFullPath($dlg.FileName)
+        if (-not $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { Set-Status 'Chỉ chọn file nằm trong thư mục workspace.' }
+        else { $script:aiFile = $path; Update-AiChips }
+    }
+    $dlg.Dispose()
+}
+$tipDoc.SetToolTip($btnAiFile, 'Chọn một file trong workspace để AI xử lý')
 $btnAiTool = New-AiChip 'Claude Code' $aiInBox {
     $items = @(for ($i = 0; $i -lt $cbAiTool.Items.Count; $i++) {
         $t = @($AiTools.Values)[$i]
@@ -3641,19 +3869,72 @@ $tipDoc.SetToolTip($btnAiSend, 'Gửi (Enter)'); $tipDoc.SetToolTip($btnAiStop, 
 $pageAi.Controls.AddRange(@($aiChat, $aiBottom, $aiTop))
 $aiChat.BringToFront()        # Dock Fill phải xếp sau Top / Bottom
 
+# Màn chọn AI hiện trước workspace; mỗi thẻ mở đúng CLI / layout tương ứng.
+function Get-AiLogoBitmap([string]$letter, [System.Drawing.Color]$color) {
+    $key = "ai-logo|$letter|$($color.ToArgb())"
+    if (-not $script:iconCache.ContainsKey($key)) {
+        $bmp = New-Object System.Drawing.Bitmap(36, 36); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.SmoothingMode = 'AntiAlias'
+        $b = New-Object System.Drawing.SolidBrush($color); $g.FillEllipse($b, 1, 1, 34, 34); $b.Dispose()
+        $f = New-Object System.Drawing.Font('Segoe UI Semibold', 16); $sf = New-Object System.Drawing.StringFormat; $sf.Alignment = 'Center'; $sf.LineAlignment = 'Center'
+        $g.DrawString($letter, $f, [System.Drawing.Brushes]::White, (New-Object System.Drawing.RectangleF(1, 1, 34, 34)), $sf)
+        $sf.Dispose(); $f.Dispose(); $g.Dispose(); $script:iconCache[$key] = $bmp
+    }
+    $script:iconCache[$key]
+}
+$aiChooser = New-Object System.Windows.Forms.Panel
+$aiChooser.Dock = 'Fill'; $aiChooser.Name = 'bg:Back'; $aiChooser.BackColor = $Theme.Back
+$lblAiPickTitle = New-AiLabel 'Chọn trợ lý AI' 'Text' $AiHead
+$lblAiPickTitle.AutoSize = $false; $lblAiPickTitle.TextAlign = 'MiddleCenter'
+$lblAiPickSub = New-AiLabel 'Chọn công cụ để mở workspace và các phiên gần đây.' 'Muted' $AiSmall
+$lblAiPickSub.AutoSize = $false; $lblAiPickSub.TextAlign = 'MiddleCenter'
+$aiChooser.Controls.AddRange(@($lblAiPickTitle, $lblAiPickSub))
+$aiCardSpecs = @(
+    @{ Key = 'claude'; Name = 'Claude Code'; Hint = 'Làm việc trực tiếp trong panel'; Letter = 'C'; Color = $AiTools.claude.Color },
+    @{ Key = 'codex'; Name = 'Codex'; Hint = 'Workspace và phiên Codex'; Letter = 'C'; Color = $AiTools.codex.Color },
+    @{ Key = 'gemini'; Name = 'Gemini CLI'; Hint = 'Làm việc trực tiếp trong panel'; Letter = 'G'; Color = $AiTools.gemini.Color },
+    @{ Key = 'deepseek'; Name = 'DeepSeek Code'; Hint = 'Deep Code CLI · mở trong terminal'; Letter = 'D'; Color = (New-Rgb 65 82 110) }
+)
+$aiChooserCards = @()
+foreach ($spec in $aiCardSpecs) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Tag = $spec.Key; $b.Name = 'bg:Surface'; $b.Text = "$($spec.Name)`r`n$($spec.Hint)"; $b.Font = $AiHead; $b.Image = Get-AiLogoBitmap $spec.Letter $spec.Color
+    $b.TextImageRelation = 'ImageBeforeText'; $b.ImageAlign = 'MiddleLeft'; $b.TextAlign = 'MiddleLeft'; $b.Padding = New-Object System.Windows.Forms.Padding(14, 8, 10, 8)
+    $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 1; $b.FlatAppearance.BorderColor = $Theme.Border; $b.FlatAppearance.MouseOverBackColor = $Theme.Hi
+    $b.BackColor = $Theme.Surface; $b.ForeColor = $Theme.Text
+    $b.Add_Click({ param($s, $e) if ([string]$s.Tag -eq 'deepseek') { Start-DeepCode } else { Open-AiWorkspace ([string]$s.Tag) } })
+    $aiChooser.Controls.Add($b); $aiChooserCards += $b
+}
+function Update-AiChooserLayout {
+    $w = $aiChooser.ClientSize.Width; $h = $aiChooser.ClientSize.Height
+    if ($w -lt 100 -or $h -lt 100) { return }
+    $cols = if ($w -ge 980) { 4 } else { 2 }; $gap = 14; $cardW = [int][math]::Min(250, ($w - 48 - $gap * ($cols - 1)) / $cols); $cardH = 104
+    $rows = [int][math]::Ceiling($aiChooserCards.Count / [double]$cols); $totalH = 42 + 18 + $rows * $cardH + ($rows - 1) * $gap
+    $top = [int][math]::Max(24, ($h - $totalH) / 2 - 24)
+    $lblAiPickTitle.SetBounds(24, $top, ($w - 48), 38); $lblAiPickSub.SetBounds(24, ($top + 42), ($w - 48), 24)
+    $gridW = $cols * $cardW + ($cols - 1) * $gap; $x0 = [int](($w - $gridW) / 2); $y0 = $top + 82
+    for ($i = 0; $i -lt $aiChooserCards.Count; $i++) { $row = [int][math]::Floor($i / $cols); $col = $i % $cols; $aiChooserCards[$i].SetBounds(($x0 + $col * ($cardW + $gap)), ($y0 + $row * ($cardH + $gap)), $cardW, $cardH) }
+}
+$aiChooser.Add_Resize({ Update-AiChooserLayout })
+$pageAi.Controls.Add($aiChooser); $aiChooser.BringToFront(); $aiChooser.Visible = $false
+foreach ($c in @($aiTop, $aiChat, $aiBottom)) { $c.Visible = $false }
+Update-AiChooserLayout
 function Update-AiBottom {
     $w = $aiBottom.ClientSize.Width
     if ($w -lt 100) { return }
-    $cw = [math]::Max(240, [math]::Min(780, $w - 64)); $cx = [int](($w - $cw) / 2)
+    $left = if ($script:aiSide -and $script:aiSide.Visible) { $script:aiSide.Width } else { 0 }
+    $available = [math]::Max(240, $w - $left)
+    $cw = [math]::Max(240, [math]::Min(780, $available - 64)); $cx = [int]($left + ($available - $cw) / 2)
     $lines = [math]::Min(8, [math]::Max(2, $txtAiIn.GetLineFromCharIndex($txtAiIn.TextLength) + 1))
     $th = $lines * $txtAiIn.Font.Height + 4
-    $ih = $th + 60
+    $ry = 14 + $th + 10
+    $actionH = [math]::Max(34, [math]::Max($btnAiFile.Height, [math]::Max($btnAiTool.Height, [math]::Max($btnAiMode.Height, $btnAiModel.Height))))
+    $ih = $ry + $actionH + 14
     $aiCtx.SetBounds(($cx + 16), 4, ($cw - 32), 34)
     $aiInBox.SetBounds($cx, 34, $cw, $ih)
-    $aiBottom.Height = 34 + $ih + 16
+    $aiBottom.Height = 34 + $ih + 14
     $txtAiIn.SetBounds(18, 14, ($cw - 36), $th)
-    $ry = 14 + $th + 10
-    $btnAiTool.Location = New-Object System.Drawing.Point(10, $ry)
+    $btnAiFile.Location = New-Object System.Drawing.Point(10, $ry)
+    $btnAiTool.Location = New-Object System.Drawing.Point(($btnAiFile.Right + 2), $ry)
     $btnAiMode.Location = New-Object System.Drawing.Point(($btnAiTool.Right + 2), $ry)
     foreach ($b in @($btnAiSend, $btnAiStop)) { $b.Location = New-Object System.Drawing.Point(($cw - 46), ($ry - 3)) }
     $btnAiModel.Location = New-Object System.Drawing.Point(($btnAiSend.Left - $btnAiModel.Width - 6), $ry)
@@ -3663,6 +3944,15 @@ $aiBottom.Add_Resize({ Update-AiBottom })
 
 function Get-AiToolKey { @($AiTools.Keys)[[math]::Max(0, $cbAiTool.SelectedIndex)] }
 function Get-AiDir { if ($cbAiDir.SelectedIndex -ge 0 -and $cbAiDir.SelectedIndex -lt $cbAiDir.Items.Count - 1) { [string]$cbAiDir.SelectedItem } else { $null } }
+function Save-AiSession {
+    if (-not $script:ai.Session -or -not $script:ai.Key) { return }
+    $parts = $script:ai.Key -split '\|', 2
+    if ($parts.Count -ne 2 -or $parts[0] -notin $AiTools.Keys -or $script:ai.Session -notmatch '^[\w.:-]+$' -or -not (Test-Path $parts[1])) { return }
+    $entry = [pscustomobject]@{ Tool = $parts[0]; Id = $script:ai.Session; Dir = $parts[1]; Title = $(if ($script:ai.Title) { $script:ai.Title } else { 'Phiên mới' }); Updated = (Get-Date).ToString('s') }
+    $PanelConfig.aiSessions = @($entry) + @($PanelConfig.aiSessions | Where-Object { $_.Id -ne $entry.Id -or $_.Tool -ne $entry.Tool -or $_.Dir -ne $entry.Dir } | Sort-Object Updated -Descending | Select-Object -First 59)
+    Save-PanelConfig $PanelConfig
+    Update-AiSessionsButton
+}
 $AiPickDir = 'Chọn thư mục khác…'
 $script:aiDirFilling = $false
 # Thư mục: dùng gần đây -> repo trong tab Git -> thư mục app trong danh mục; mục cuối mở hộp chọn thư mục
@@ -3707,6 +3997,10 @@ function Update-AiContext([switch]$Note) {
 function Update-AiChips {
     $t = $AiTools[(Get-AiToolKey)]
     $btnAiTool.Text = "$($t.Name) ▾"; $btnAiTool.Image = Get-DotBitmap $t.Color
+    $fileLabel = if ($script:aiFile) { Split-Path $script:aiFile -Leaf } else { '+' }
+    if ($fileLabel.Length -gt 12) { $fileLabel = $fileLabel.Substring(0, 10) + '…' }
+    $btnAiFile.Text = if ($script:aiFile) { $fileLabel + ' ×' } else { '+' }
+    $tipDoc.SetToolTip($btnAiFile, $(if ($script:aiFile) { $script:aiFile } else { 'Chọn một file trong workspace để AI xử lý' }))
     $mi = [math]::Max(0, $cbAiMode.SelectedIndex)
     $btnAiMode.Text = "$(@('Chỉ đọc', 'Cho sửa file', 'Toàn quyền')[$mi]) ▾"
     if ($IconFontName) { $btnAiMode.Image = Get-IconBitmap @('E7B3', 'E70F', 'E7BA')[$mi] $(if ($mi -eq 2) { $Theme.Warn } else { $Theme.Muted }) }
@@ -3734,10 +4028,24 @@ function Show-AiWelcome {
     if (-not $exe -and $script:aiItems.Count) { Add-AiError "Chưa cài $($t.Name) - chọn chip công cụ → Cài / cập nhật CLI." }
     Update-AiChips; Update-AiLayout
 }
+function Show-AiPicker {
+    if ($script:aiRun) { Set-Status 'AI đang chạy; chờ xong hoặc dừng phiên trước.'; return }
+    $script:aiWorkspace = $false
+    foreach ($c in @($aiTop, $aiChat, $aiBottom)) { $c.Visible = $false }
+    $aiChooser.Visible = $true; $aiChooser.BringToFront(); Update-AiChooserLayout
+}
+function Open-AiWorkspace([string]$tool) {
+    if ($tool -notin $AiTools.Keys -or $script:aiRun) { return }
+    $script:aiWorkspace = $true; $script:aiShown = $true; $aiChooser.Visible = $false
+    foreach ($c in @($aiTop, $aiChat, $aiBottom)) { $c.Visible = $true }
+    $cbAiTool.SelectedIndex = @($AiTools.Keys).IndexOf($tool)
+    $script:ai.Session = $null; $script:ai.Key = ''; $script:ai.Title = $null; $script:ai.FullOk = $false
+    Clear-AiChat; Update-AiDirs ''; Show-AiWelcome; Update-AiSessionsButton
+}
 function Update-AiUi {
     $busy = [bool]$script:aiRun
     $btnAiSend.Visible = -not $busy; $btnAiStop.Visible = $busy
-    foreach ($c in @($btnAiTool, $btnAiMode, $btnAiModel, $btnAiDir)) { $c.Enabled = -not $busy }
+    foreach ($c in @($btnAiTool, $btnAiMode, $btnAiModel, $btnAiDir, $btnAiSessions, $btnAiSwitch)) { $c.Enabled = -not $busy }
     if (-not $busy -and $lblAiState.Text) { $lblAiState.Text = ''; Update-AiLayout }
 }
 $cbAiTool.Add_SelectedIndexChanged({
@@ -3748,20 +4056,31 @@ $cbAiTool.Add_SelectedIndexChanged({
 $cbAiMode.Add_SelectedIndexChanged({ $PanelConfig.aiMode = $cbAiMode.SelectedIndex; Save-PanelConfig $PanelConfig })
 # Lần đầu mở tab: nạp danh sách thư mục + màn hình chào
 $script:aiShown = $false
+$script:aiWorkspace = $false
 function Enter-AiTab {
-    if (-not $script:aiShown) { $script:aiShown = $true; Update-AiDirs ''; Show-AiWelcome } else { Update-AiContext }
+    if (-not $script:aiWorkspace) { Show-AiPicker; return }
+    Update-AiContext
     Update-AiBottom; Update-AiLayout
     [void]$txtAiIn.Focus()
 }
 
 function Send-AiPrompt {
     $prompt = $txtAiIn.Text.Trim()
-    if (-not $prompt -or $script:aiRun) { return }
+    if ((-not $prompt -and -not $script:aiFile) -or $script:aiRun) { return }
     $tool = Get-AiToolKey; $t = $AiTools[$tool]
     $exe = Find-AiExe $t.Exe
     if (-not $exe) { Show-AiWelcome; return }
     $dir = Get-AiDir
     if (-not $dir -or -not (Test-Path $dir)) { Set-Status 'Chọn thư mục project cho AI trước.'; return }
+    $displayPrompt = $prompt
+    if ($script:aiFile) {
+        $root = [IO.Path]::GetFullPath($dir).TrimEnd('\') + '\'
+        $file = [IO.Path]::GetFullPath($script:aiFile)
+        if (-not $file.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { Set-Status 'File đã chọn không còn nằm trong workspace hiện tại.'; $script:aiFile = $null; Update-AiChips; return }
+        $relativeFile = $file.Substring($root.Length) -replace '\\', '/'
+        $prompt = "$prompt`n`nPlease read and process this workspace file: $relativeFile".Trim()
+        $displayPrompt = "$displayPrompt`n📎 $relativeFile".Trim()
+    }
     $mode = $AiModes[$cbAiMode.SelectedIndex]
     if ($mode -eq 'full' -and -not $script:ai.FullOk) {
         if ([System.Windows.Forms.MessageBox]::Show("Toàn quyền: $($t.Name) được sửa file và chạy mọi lệnh trong`n$dir`nmà không hỏi lại.`n`nChỉ dùng với repo đã commit / có thể khôi phục. Tiếp tục?", 'AI Code', 'YesNo', 'Warning') -ne 'Yes') { return }
@@ -3769,6 +4088,10 @@ function Send-AiPrompt {
     }
     $model = $cbAiModel.Text.Trim()
     if ($model -notmatch '^[\w.:/@-]*$') { Set-Status 'Tên model không hợp lệ.'; return }
+    if ($tool -eq 'codex' -and $model -in @('', 'gpt-5.4', 'gpt-5.4-mini')) {
+        $model = 'gpt-5.5'
+        Add-AiNote 'Panel dùng gpt-5.5 cho Codex vì model gpt-5.4 hiện không được tài khoản ChatGPT này hỗ trợ.'
+    }
     $key = "$tool|$dir"
     if ($script:ai.Key -ne $key) {
         if ($script:ai.Session) { Add-AiNote '— phiên mới (đổi công cụ / thư mục) —' }
@@ -3777,9 +4100,10 @@ function Send-AiPrompt {
     $sess = if ($script:ai.Session -match '^[\w.:-]+$') { $script:ai.Session } else { $null }
     $cmd = Get-AiCommand $exe (Get-AiArgs $tool $mode $model $sess)
 
-    if (-not $sess) { $first = ($prompt -split "`r?`n")[0]; $script:ai.Title = $(if ($first.Length -gt 70) { $first.Substring(0, 70) + '…' } else { $first }) }
-    Add-AiUser $prompt
+    if (-not $sess) { $first = ($displayPrompt -split "`r?`n")[0]; $script:ai.Title = $(if ($first.Length -gt 70) { $first.Substring(0, 70) + '…' } else { $first }) }
+    Add-AiUser $displayPrompt
     $txtAiIn.Clear()
+    $script:aiFile = $null; Update-AiChips
     $lblAiState.Text = "◐ $($t.Name) đang làm việc…"
     Update-AiChips; Update-AiLayout -Scroll
     $PanelConfig.aiModel = $model
@@ -3828,9 +4152,15 @@ function Complete-AiRun {
     $aiTimer.Stop()
     Flush-AiBuffer
     $s = $r.Sync
+    Save-AiSession
     if ($r.Stopped) { Add-AiNote '■ Đã dừng.' }
     elseif ($s.Exit -ne 0) {
         $err = (($s.Err -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 12) -join "`n")
+        if ($s.Err -match 'models? cache|base_instructions') { $err = 'Cache Codex không tương thích. Bấm “Cài / cập nhật CLI”, đợi cập nhật xong rồi mở phiên mới.' }
+        elseif ($s.Err -match 'model.*not supported|unsupported.*model') { $err = 'Model này không được hỗ trợ với tài khoản hiện tại. Chọn gpt-5.5 trong danh sách Model.' }
+        elseif ($s.Err -match '"type":"error"') {
+            try { $j = $s.Err | ConvertFrom-Json; if ($j.error.error.message) { $err = [string]$j.error.error.message } elseif ($j.error.message) { $err = [string]$j.error.message } } catch { }
+        }
         Add-AiError ("CLI thoát mã $($s.Exit)" + $(if ($err) { ":`n$err" } else { '' }))
         if ($s.Err -match 'log ?in|auth|API key|unauthori|401|credential') { Add-AiNote 'Có vẻ CLI chưa đăng nhập - bấm "Mở terminal" chạy một lần để đăng nhập.' }
         if ($s.Err -match 'Unknown (argument|option)|unexpected argument|unrecognized|invalid value') { Add-AiNote 'CLI có thể là bản cũ chưa hỗ trợ tham số này - bấm "Cài / cập nhật CLI".' }
@@ -3873,13 +4203,30 @@ function Open-AiTerminal {
     if (Get-Command wt.exe) { Start-Process wt.exe -ArgumentList "-d `"$($dir.TrimEnd('\'))`" --title `"$($t.Name)`" cmd /k $line" }
     else { Start-Process cmd.exe -ArgumentList "/k $line" -WorkingDirectory $dir }
 }
+function Start-DeepCode {
+    $exe = Find-AiExe 'deepcode'
+    if (-not $exe) {
+        [System.Windows.Forms.MessageBox]::Show("Cài Deep Code bằng:`n  npm install -g @vegamo/deepcode-cli`n`nSau đó cấu hình API key trong:`n  $env:USERPROFILE\.deepcode\settings.json`n`nTrang hướng dẫn: api-docs.deepseek.com/quick_start/agent_integrations/deepcode", 'DeepSeek Code', 'OK', 'Information') | Out-Null
+        return
+    }
+    $dir = Get-AiDir
+    if (-not $dir -or -not (Test-Path $dir)) {
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; $dlg.Description = 'Chọn thư mục project cho Deep Code'
+        if ($dlg.ShowDialog() -ne 'OK') { return }; $dir = $dlg.SelectedPath
+    }
+    $line = '"' + $exe + '"'
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) { Start-Process wt.exe -ArgumentList "-d `"$dir`" --title `"DeepSeek Code`" cmd /k $line" }
+    else { Start-Process cmd.exe -ArgumentList "/k $line" -WorkingDirectory $dir }
+    Set-Status "Đã mở Deep Code tại $dir · dùng /resume trong terminal để tiếp tục phiên cũ."
+}
 function Install-AiCli {
     $t = $AiTools[(Get-AiToolKey)]
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
         if ([System.Windows.Forms.MessageBox]::Show("Cần Node.js (npm) để cài $($t.Name).`n`nMở trang tải Node.js?", 'AI Code', 'YesNo', 'Information') -eq 'Yes') { Start-Process 'https://nodejs.org/' }
         return
     }
-    $line = "npm install -g $($t.Pkg)@latest"
+    $exe = Find-AiExe $t.Exe
+    $line = if ($t.Exe -eq 'codex' -and $exe -like '*.cmd') { 'npm install -g @openai/codex@latest' } elseif ($exe -and $t.Exe -eq 'claude') { 'claude update' } else { "npm install -g $($t.Pkg)@latest" }
     if (Get-Command wt.exe) { Start-Process wt.exe -ArgumentList "--title `"Cài $($t.Name)`" cmd /k $line" } else { Start-Process cmd.exe -ArgumentList "/k $line" }
     Set-Status "Đang cài $($t.Name) trong cửa sổ terminal - xong thì bấm Phiên mới."
 }
@@ -4220,7 +4567,7 @@ function Show-UpdateDialog {
     $r = $script:latestRel
     if (-not $r) { Start-UpdateCheck -Manual; return }
     $d = New-Object System.Windows.Forms.Form
-    $d.Text = 'Cập nhật DevOps Panel'; $d.Icon = $AppIcon; $d.Font = $font
+    $d.Text = 'Cập nhật Develop Workspace'; $d.Icon = $AppIcon; $d.Font = $font
     $d.Size = New-Object System.Drawing.Size(620, 480); $d.StartPosition = 'CenterParent'
     $d.FormBorderStyle = 'FixedDialog'; $d.MinimizeBox = $false; $d.MaximizeBox = $false
     $l1 = New-Label $(if ($r.IsNewer) { "Có bản mới: $($r.Version)" } else { "Đang dùng bản mới nhất" }) 16 14 570 $d -Bold
@@ -4234,7 +4581,7 @@ function Show-UpdateDialog {
     $notes.Location = New-Object System.Drawing.Point(16, 102); $notes.Size = New-Object System.Drawing.Size(572, 260)
     $notes.Text = $(if ($r.Notes.Trim()) { $r.Notes.Trim() -replace "`r?`n", "`r`n" } else { '(Không có ghi chú)' })
     $d.Controls.Add($notes)
-    $hint = New-Label $(if ($r.SetupUrl) { "Cài bản mới: tải bộ cài ($([math]::Round($r.SetupSize / 1KB)) KB) từ GitHub, panel tự đóng rồi mở lại." } else { 'Bản phát hành này chưa đính kèm DevOpsPanel-Setup.exe - mở trang GitHub để tải.' }) 16 368 572 $d
+    $hint = New-Label $(if ($r.SetupUrl) { "Cài bản mới: tải bộ cài ($([math]::Round($r.SetupSize / 1KB)) KB) từ GitHub, panel tự đóng rồi mở lại." } else { 'Bản phát hành này chưa đính kèm PegasusPanel-Setup.exe - mở trang GitHub để tải.' }) 16 368 572 $d
     $hint.ForeColor = $Theme.Muted; $hint.Height = 22
     $bInstall = New-Object System.Windows.Forms.Button; $bInstall.Text = 'Cài bản mới'; $bInstall.Size = New-Object System.Drawing.Size(130, 34); $bInstall.Location = New-Object System.Drawing.Point(16, 396)
     $bInstall.Enabled = [bool]($r.IsNewer -and $r.SetupUrl)
@@ -4251,9 +4598,9 @@ function Show-UpdateDialog {
 
 # Tải bộ cài ở nền rồi chạy; bộ cài tự tắt panel đang chạy, ghi đè và mở lại
 function Install-PanelUpdate($r) {
-    $installed = $PSScriptRoot -like (Join-Path $env:LOCALAPPDATA 'Programs\DevOpsPanel*')
+    $installed = $PSScriptRoot -like (Join-Path $env:LOCALAPPDATA 'Programs\PegasusPanel*')
     if (-not $installed) {
-        $q = "Panel đang chạy từ thư mục mã nguồn:`n$PSScriptRoot`n`nBộ cài sẽ cài bản $($r.Version) vào %LOCALAPPDATA%\Programs\DevOpsPanel (không sửa thư mục mã nguồn). Tiếp tục?"
+        $q = "Panel đang chạy từ thư mục mã nguồn:`n$PSScriptRoot`n`nBộ cài sẽ cài bản $($r.Version) vào %LOCALAPPDATA%\Programs\PegasusPanel (không sửa thư mục mã nguồn). Tiếp tục?"
         if ([System.Windows.Forms.MessageBox]::Show($q, 'Cập nhật', 'YesNo', 'Question') -ne 'Yes') { return }
     }
     Set-Status "Đang tải bộ cài $($r.Version)..."
@@ -4287,13 +4634,13 @@ $form.Add_FormClosing({
     if (-not $script:exiting -and $e.CloseReason -eq 'UserClosing') {
         $e.Cancel = $true
         $form.Hide()
-        $tray.ShowBalloonTip(2000, 'DevOps Panel', 'Panel vẫn chạy ở khay hệ thống. Chuột phải để Thoát.', 'Info')
+        $tray.ShowBalloonTip(2000, 'Develop Workspace', 'Panel vẫn chạy ở khay hệ thống. Chuột phải để Thoát.', 'Info')
     }
 })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 5000
-$timer.Add_Tick({ if ($form.Visible -and $tabs.SelectedTab -eq $pageMain) { Update-Status } })
+$timer.Add_Tick({ Start-WebPanel; if ($form.Visible -and $tabs.SelectedTab -eq $pageMain) { Update-Status } })
 
 $healthTimer = New-Object System.Windows.Forms.Timer
 $healthTimer.Interval = 1000
@@ -4386,7 +4733,7 @@ $cbAiDir.Anchor = 'Top, Left, Right'; $lblAiModel.Anchor = 'Top, Right'; $cbAiMo
 $btnProfiles.Anchor = 'Top, Right' 
 Set-FillColumn $lvCpu 0
 Set-FillColumn $lvRam 0
-foreach ($g in @($gGeneral, $gWsl, $gScan, $lblDataDir)) { $g.Anchor = 'Top, Left, Right' }
+$lblDataDir.Anchor = 'Top, Left, Right'
 
 # Lần chạy đầu trên máy mới: chưa có thư mục quét và danh mục trống -> mở tab Cài đặt
 if (-not @($PanelConfig.scanRoots).Count -and -not @((Get-AppsConfig).Apps).Count) {
@@ -4407,6 +4754,12 @@ $cw = $form.ClientSize.Width
 $header.SetBounds(0, 0, $cw, $HeaderH); $header.Anchor = 'Top, Left, Right'
 $sideNav.Anchor = 'Top, Bottom, Left'
 Set-NavLayout
+Set-SettingsLayout
+    if (Get-Command Install-AiSidebar -ErrorAction SilentlyContinue) { Install-AiSidebar }
+    # Dong splash khi form chinh da hien
+    Update-Splash 100 'Hoan tat!'
+    Start-Sleep -Milliseconds 200
+    try { $_splash.Close(); $_splash.Dispose() } catch {}
 })
 
 [System.Windows.Forms.Application]::Run($form)
