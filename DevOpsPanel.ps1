@@ -298,6 +298,8 @@ $form.Controls.Add($tabs)
 $HeaderH = 56
 $HeaderFont = New-Object System.Drawing.Font('Segoe UI Semibold', 13)
 $HeaderSub = New-Object System.Drawing.Font('Segoe UI', 9)
+$TabFont = New-Object System.Drawing.Font('Segoe UI', 10)
+$TabFontSel = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
 $CardFont = New-Object System.Drawing.Font('Segoe UI Semibold', 9.75)
 $script:hdrChips = @()
 $header = New-Object System.Windows.Forms.Panel
@@ -313,10 +315,41 @@ $header.Add_Paint({
     $g.DrawIcon($AppIcon, (New-Object System.Drawing.Rectangle(16, 12, 32, 32)))
     $white = [System.Drawing.Color]::White
     [System.Windows.Forms.TextRenderer]::DrawText($g, $AppName, $HeaderFont, (New-Object System.Drawing.Point(56, 7)), $white)
-    [System.Windows.Forms.TextRenderer]::DrawText($g, "v$PanelVersion  ·  $((Get-Greeting) -replace '^\W+\s*', '')", $HeaderSub, (New-Object System.Drawing.Point(58, 32)), (Get-Alpha 225 $white))
+    $sub = "v$PanelVersion  ·  $((Get-Greeting) -replace '^\W+\s*', '')"
+    [System.Windows.Forms.TextRenderer]::DrawText($g, $sub, $HeaderSub, (New-Object System.Drawing.Point(58, 32)), (Get-Alpha 225 $white))
+    $navEnd = 56 + [math]::Max([System.Windows.Forms.TextRenderer]::MeasureText($AppName, $HeaderFont).Width, [System.Windows.Forms.TextRenderer]::MeasureText($sub, $HeaderSub).Width)
+    $script:hdrTabs = @()
+    if ($PanelConfig.navLayout -ne 'side') {
+        # Menu tab dạng pill trắng trên dải màu; không đủ chỗ thì chỉ hiện icon (rê chuột để xem tên)
+        $x = $navEnd + 28
+        $ws = @(foreach ($pg in $tabs.TabPages) { [System.Windows.Forms.TextRenderer]::MeasureText($pg.Text, $TabFontSel).Width + 46 })
+        $iconOnly = ($x + ($ws | Measure-Object -Sum).Sum + 4 * $ws.Count) -gt ($r.Right - 14)
+        $rects = @()
+        for ($i = 0; $i -lt $tabs.TabCount; $i++) {
+            $pg = $tabs.TabPages[$i]; $sel = $i -eq $tabs.SelectedIndex
+            $w = if ($iconOnly) { 38 } else { $ws[$i] }
+            $rc = New-Object System.Drawing.Rectangle($x, 12, $w, 32)
+            $rects += $rc
+            if ($sel -or $i -eq $script:hdrHover) {
+                $p = New-RoundRect $rc.X $rc.Y $rc.Width $rc.Height 10
+                $fill = New-Object System.Drawing.SolidBrush((Get-Alpha $(if ($sel) { 70 } else { 32 }) $white)); $g.FillPath($fill, $p); $fill.Dispose(); $p.Dispose()
+            }
+            $code = $TabIcons[$pg.Text]
+            $ix = if ($iconOnly) { $rc.X + 11 } else { $rc.X + 12 }
+            if ($code -and $IconFontName) { $g.DrawImage((Get-IconBitmap $code $white), $ix, ($rc.Y + 8), 16, 16) }
+            if (-not $iconOnly) {
+                [System.Windows.Forms.TextRenderer]::DrawText($g, $pg.Text, $(if ($sel) { $TabFontSel } else { $TabFont }), (New-Object System.Drawing.Rectangle(($rc.X + 34), $rc.Y, ($w - 36), $rc.Height)), $(if ($sel) { $white } else { Get-Alpha 220 $white }),
+                    [System.Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, NoPadding')
+            }
+            $x += $w + 4
+        }
+        $script:hdrTabs = $rects; $script:hdrIconOnly = $iconOnly
+        $navEnd = $x
+    }
     $x = $r.Right - 14
     foreach ($chip in @($script:hdrChips)) {
         $w = [System.Windows.Forms.TextRenderer]::MeasureText($chip, $HeaderSub).Width + 14
+        if ($x - $w -lt $navEnd + 10) { break }          # chip chỉ hiện khi còn chỗ
         $x -= $w
         $p = New-RoundRect $x 15 $w 26 13
         $fill = New-Object System.Drawing.SolidBrush((Get-Alpha 48 $white)); $g.FillPath($fill, $p); $fill.Dispose(); $p.Dispose()
@@ -325,6 +358,18 @@ $header.Add_Paint({
     }
 })
 $header.Add_Resize({ param($s, $e) $s.Invalidate() })
+$script:hdrTabs = @(); $script:hdrHover = -1; $script:hdrIconOnly = $false
+function Get-HeaderTabAt($pt) { for ($i = 0; $i -lt $script:hdrTabs.Count; $i++) { if ($script:hdrTabs[$i].Contains($pt)) { return $i } }; -1 }
+$header.Add_MouseDown({ param($s, $e) $i = Get-HeaderTabAt $e.Location; if ($i -ge 0) { $tabs.SelectedIndex = $i } })
+$header.Add_MouseMove({
+    param($s, $e)
+    $i = Get-HeaderTabAt $e.Location
+    if ($i -ne $script:hdrHover) {
+        $script:hdrHover = $i; $s.Cursor = $(if ($i -ge 0) { 'Hand' } else { 'Default' }); $s.Invalidate()
+        $tipDoc.SetToolTip($s, $(if ($i -ge 0 -and $script:hdrIconOnly) { $tabs.TabPages[$i].Text } else { '' }))
+    }
+})
+$header.Add_MouseLeave({ param($s, $e) $script:hdrHover = -1; $s.Invalidate() })
 $form.Controls.Add($header)
 $script:hdr = @{ Cpu = $null; Ram = $null; Apps = $null }
 function Update-HeaderChips {
@@ -2765,7 +2810,7 @@ function Invoke-ProjectScan {
     $appsSync.Kick = $true
 }
 
-$gGeneral = New-Group 'Chung (tên hiển thị · giao diện)' 10 70 $pageSettings
+$gGeneral = New-Group 'Chung (tên hiển thị · giao diện · menu)' 10 104 $pageSettings
 New-Label 'Tên hiển thị' 12 30 110 $gGeneral | Out-Null
 $txtName = New-Object System.Windows.Forms.TextBox
 $txtName.Location = New-Object System.Drawing.Point(125, 27); $txtName.Size = New-Object System.Drawing.Size(150, 26)
@@ -2796,8 +2841,20 @@ $cbTheme.Add_SelectedIndexChanged({
     Set-Status ('Đã chuyển sang ' + $cbTheme.SelectedItem.ToString().ToLower() + '.')
 })
 $gGeneral.Controls.Add($cbTheme)
+New-Label 'Menu tab' 12 64 110 $gGeneral | Out-Null
+$cbNav = New-Object System.Windows.Forms.ComboBox
+$cbNav.DropDownStyle = 'DropDownList'
+$cbNav.Location = New-Object System.Drawing.Point(125, 61); $cbNav.Size = New-Object System.Drawing.Size(236, 28)
+[void]$cbNav.Items.AddRange(@('Trên dải tiêu đề (gọn)', 'Bên trái (thu gọn được)'))
+$cbNav.SelectedIndex = $(if ($PanelConfig.navLayout -eq 'side') { 1 } else { 0 })
+$cbNav.Add_SelectedIndexChanged({
+    $PanelConfig.navLayout = @('top', 'side')[$cbNav.SelectedIndex]; Save-PanelConfig $PanelConfig
+    Set-NavLayout
+    Set-Status ('Menu tab: ' + $cbNav.SelectedItem)
+})
+$gGeneral.Controls.Add($cbNav)
 
-$gWsl = New-Group 'WSL / PostgreSQL (áp dụng sau khi mở lại panel)' 88 100 $pageSettings
+$gWsl = New-Group 'WSL / PostgreSQL (áp dụng sau khi mở lại panel)' 122 100 $pageSettings
 New-Label 'Distro WSL' 12 30 110 $gWsl | Out-Null
 $cbDistro = New-Object System.Windows.Forms.ComboBox
 $cbDistro.DropDownStyle = 'DropDownList'
@@ -2814,7 +2871,7 @@ $numPg.Maximum = 65535; $numPg.Value = [int]$PanelConfig.pgUbuntuPort
 $gWsl.Controls.Add($numPg)
 New-Label '0 = không dùng PostgreSQL trong WSL' 235 64 270 $gWsl | Out-Null
 
-$gScan = New-Group 'Tab Ứng dụng: thư mục gốc để quét project' 196 250 $pageSettings
+$gScan = New-Group 'Tab Ứng dụng: thư mục gốc để quét project' 230 250 $pageSettings
 $lbRoots = New-Object System.Windows.Forms.ListBox
 $lbRoots.Location = New-Object System.Drawing.Point(12, 26); $lbRoots.Size = New-Object System.Drawing.Size(360, 110)
 foreach ($r in $PanelConfig.scanRoots) { [void]$lbRoots.Items.Add($r) }
@@ -2858,11 +2915,11 @@ function Save-SettingsTab {
     if ($ranges.Count) { Save-AppsConfig $ranges (Get-AppsConfig).Apps }
 }
 
-New-Button 'Lưu và mở lại panel' 6 456 200 $pageSettings {
+New-Button 'Lưu và mở lại panel' 6 490 200 $pageSettings {
     Save-SettingsTab
     $script:restartRequested = $true; $script:exiting = $true; $form.Close()
 } | Out-Null
-New-Button 'Chẩn đoán tốc độ' 212 456 150 $pageSettings {
+New-Button 'Chẩn đoán tốc độ' 212 490 150 $pageSettings {
     Set-Status 'Đang đo từng bước (có thể mất 10-30 giây)...'
     $form.Cursor = 'AppStarting'
     Start-CoreAsync 'Get-PerfDiagnostics' @{} {
@@ -2874,7 +2931,7 @@ New-Button 'Chẩn đoán tốc độ' 212 456 150 $pageSettings {
         [System.Windows.Forms.MessageBox]::Show($txt + "`r`n`r`n(Đã copy vào clipboard)", 'Chẩn đoán tốc độ', 'OK', 'Information') | Out-Null
     }
 } | Out-Null
-$lblDataDir = New-Label "Dữ liệu: $DataDir" 370 462 145 $pageSettings
+$lblDataDir = New-Label "Dữ liệu: $DataDir" 370 496 145 $pageSettings
 $lblDataDir.ForeColor = $Theme.Muted; $lblDataDir.AutoEllipsis = $true
 
 # ---------- Tab Trợ giúp ----------
@@ -2954,9 +3011,11 @@ GIT
 
 AI CODE
   Làm việc với Claude Code, Codex hoặc Gemini CLI ngay trong panel (cần cài CLI tương ứng, bấm "Cài / cập nhật CLI").
-  • Chọn công cụ, thư mục project (repo trong tab Git, app trong danh mục, hoặc chọn thư mục khác), quyền và model.
+  • Chip thư mục ở thanh trên: chọn repo / thư mục project. Chip trong ô soạn: công cụ (Claude / Codex / Gemini), quyền, model.
   • Quyền: Chỉ đọc = hỏi đáp / lên kế hoạch; Cho phép sửa file = AI sửa code trong thư mục; Toàn quyền = sửa file + chạy lệnh.
-  • Gõ yêu cầu, Ctrl+Enter để gửi. Các lượt sau tiếp tục cùng phiên; "Phiên mới" để bắt đầu lại; "Dừng" để huỷ.
+  • Gõ yêu cầu, Enter để gửi (Shift+Enter xuống dòng). Các lượt sau tiếp tục cùng phiên; "Phiên mới" để bắt đầu lại;
+    nút tròn chuyển thành ■ khi AI đang chạy - bấm để dừng. Dòng "▸ đọc 2 file, sửa 1 file" bấm vào để xem chi tiết.
+  • Dải phía trên ô soạn: nhánh git, số dòng thêm / bớt; bấm "Xem thay đổi / Commit" để review diff rồi commit.
   • "Xem thay đổi / Commit…" mở màn hình Commit để review diff của AI rồi commit / push.
   • "Mở terminal" mở CLI ở chế độ tương tác (đăng nhập lần đầu, hoặc tiếp tục phiên đang chat).
   Từ tab Git: chuột phải repo → "Code với AI tại repo này".
@@ -2971,6 +3030,7 @@ K3S
 
 CÀI ĐẶT
   Tên hiển thị, giao diện sáng / tối, distro WSL, port PostgreSQL, thư mục gốc để quét project.
+  Menu tab: trên dải tiêu đề (mặc định, gọn - thiếu chỗ thì chỉ hiện icon) hoặc bên trái (bấm "Thu gọn menu" để chỉ còn icon).
   Xuất / nhập danh mục app (kèm bộ app) để chia sẻ cho người trong team - tự đổi đường dẫn theo máy.
   Máy chạy chậm / không load được Git → bấm "Chẩn đoán tốc độ" rồi gửi kết quả cho người hỗ trợ.
 
@@ -3055,13 +3115,14 @@ $AiTools = [ordered]@{
     gemini = @{ Name = 'Gemini CLI';  Exe = 'gemini'; Color = (New-Rgb 66 133 244); Pkg = '@google/gemini-cli';       Models = @('gemini-2.5-pro', 'gemini-2.5-flash') }
 }
 $AiModes = @('plan', 'edit', 'full')
-$AiFont = New-Object System.Drawing.Font('Segoe UI', 10)
+$AiFont = New-Object System.Drawing.Font('Segoe UI', 10.5)
+$AiHead = New-Object System.Drawing.Font('Segoe UI Semibold', 11.5)
+$AiMonoSmall = New-Object System.Drawing.Font('Consolas', 9)
 $AiBold = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
 $AiSmall = New-Object System.Drawing.Font('Segoe UI', 9)
 $AiMono = New-Object System.Drawing.Font('Consolas', 9.5)
-$script:ai = @{ Key = ''; Session = $null; FullOk = $false; Buf = '' }
+$script:ai = @{ Key = ''; Session = $null; FullOk = $false; Buf = ''; Title = $null }
 $script:aiRun = $null
-$script:aiRuns = New-Object System.Collections.ArrayList       # các đoạn đã in (để vẽ lại khi đổi theme)
 
 function Find-AiExe([string]$name) {
     $c = Get-Command "$name.exe", "$name.cmd" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -3100,20 +3161,176 @@ function Get-AiCommand([string]$exe, [string[]]$cliArgs) {
     else { @{ File = $exe; Args = $joined } }
 }
 
-# ---- In ra khung chat: mỗi đoạn = chữ + màu (tên màu theme hoặc Color) + font + thụt lề ----
-function Add-AiRun([string]$text, $color, $fnt, [int]$indent = 14, [switch]$NoLog) {
-    if (-not $NoLog) { [void]$script:aiRuns.Add(@($text, $color, $fnt, $indent)) }
-    $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.SelectionLength = 0
-    $rtbAi.SelectionFont = $fnt
-    $rtbAi.SelectionColor = $(if ($color -is [string]) { $Theme[$color] } else { $color })
-    $rtbAi.SelectionIndent = $indent
-    $rtbAi.SelectedText = $text
+# ---- Khung chat kiểu Claude desktop: mỗi phần tử là 1 control xếp dọc trong cột giữa ($aiChat) ----
+#   user = bong bóng bên phải · md = câu trả lời (RichTextBox chọn / copy được) · act = nhóm thao tác tool (bấm để mở)
+#   note = dòng chú thích nhỏ · err = khung lỗi
+# Control có Name 'bg:<màu theme>' thì Set-ControlTheme tô nền theo màu đó; chữ của câu trả lời lưu lại để vẽ lại khi đổi theme.
+$script:aiItems = New-Object System.Collections.ArrayList
+$script:aiRtb = $null
+$script:aiLaying = $false; $script:aiRelayout = $false; $script:aiStick = $true
+function Test-AiAtBottom { (-$aiChat.AutoScrollPosition.Y + $aiChat.ClientSize.Height) -ge ($aiChat.AutoScrollMinSize.Height - 60) }
+function Add-AiItem([string]$kind, $ctl) {
+    $script:aiStick = Test-AiAtBottom
+    $aiChat.Controls.Add($ctl)
+    [void]$script:aiItems.Add(@{ Kind = $kind; Ctl = $ctl })
+    Update-AiLayout -Scroll:$script:aiStick
 }
-function Show-AiRuns { $rtbAi.Clear(); foreach ($r in @($script:aiRuns)) { Add-AiRun $r[0] $r[1] $r[2] $r[3] -NoLog }; $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.ScrollToCaret() }
-function Add-AiHeader([string]$who, $color) { Add-AiRun "`n● " $color $AiBold 4; Add-AiRun "$who`n" $color $AiBold 4 }
-function Add-AiNote([string]$t) { Add-AiRun "$t`n" 'Muted' $AiSmall 18 }
-function Add-AiError([string]$t) { Add-AiRun "✗ $t`n" 'Err' $AiSmall 18 }
-function Add-AiTool([string]$name, [string]$detail) { Add-AiRun "▸ $name  " 'Accent' $AiSmall 18; Add-AiRun "$detail`n" 'Muted' $AiSmall 18 }
+function Clear-AiChat {
+    foreach ($it in @($script:aiItems)) { $aiChat.Controls.Remove($it.Ctl); $it.Ctl.Dispose() }
+    $script:aiItems.Clear(); $script:aiRtb = $null
+    Update-AiLayout
+}
+function Move-AiScroll([int]$d) { $aiChat.AutoScrollPosition = New-Object System.Drawing.Point(0, [math]::Max(0, -$aiChat.AutoScrollPosition.Y + $d)) }
+
+# Ghi 1 đoạn chữ vào câu trả lời đang viết (tạo mới nếu phần tử cuối không phải câu trả lời)
+function Add-AiRun([string]$text, $color, $fnt, [int]$indent = 0, [switch]$NoLog, $rtb = $null) {
+    if (-not $rtb) {
+        $last = if ($script:aiItems.Count) { $script:aiItems[$script:aiItems.Count - 1] } else { $null }
+        if (-not $last -or $last.Kind -ne 'md') {
+            $r = New-Object System.Windows.Forms.RichTextBox
+            $r.Name = 'bg:Back'; $r.BackColor = $Theme.Back; $r.BorderStyle = 'None'; $r.ReadOnly = $true; $r.ScrollBars = 'None'
+            $r.DetectUrls = $true; $r.WordWrap = $true; $r.Font = $AiFont; $r.TabStop = $false; $r.Width = 600
+            $r.Tag = @{ H = 20; Runs = New-Object System.Collections.ArrayList }
+            $r.Add_ContentsResized({ param($s, $e) if ($s.Tag.H -ne $e.NewRectangle.Height) { $s.Tag.H = $e.NewRectangle.Height; Update-AiLayout -Scroll:$script:aiStick } })
+            $r.Add_LinkClicked({ param($s, $e) Start-Process $e.LinkText })
+            $r.Add_MouseWheel({ param($s, $e) Move-AiScroll (-$e.Delta) })
+            Add-AiItem 'md' $r
+            [void]$r.Handle
+            $script:aiRtb = $r
+        }
+        $rtb = $script:aiRtb
+    }
+    if (-not $NoLog) { [void]$rtb.Tag.Runs.Add(@($text, $color, $fnt, $indent)) }
+    $rtb.SelectionStart = $rtb.TextLength; $rtb.SelectionLength = 0
+    $rtb.SelectionFont = $fnt
+    $rtb.SelectionColor = $(if ($color -is [string]) { $Theme[$color] } else { $color })
+    $rtb.SelectionIndent = $indent
+    $rtb.SelectedText = $text
+}
+function New-AiLabel([string]$text, [string]$colorKey, $fnt) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.AutoSize = $true; $l.Text = $text; $l.Font = $fnt; $l.ForeColor = $Theme[$colorKey]; $l.UseMnemonic = $false
+    $l
+}
+function Add-AiUser([string]$text) {
+    $p = New-Object System.Windows.Forms.Panel
+    $p.Name = 'bg:Back'; Set-DoubleBuffered $p
+    $p.Add_Paint({
+        param($s, $e)
+        $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'; $g.Clear($s.Parent.BackColor)
+        $path = New-RoundRect 0 0 ($s.Width - 1) ($s.Height - 1) 14
+        $b = New-Object System.Drawing.SolidBrush($Theme.Sel); $g.FillPath($b, $path); $b.Dispose(); $path.Dispose()
+    })
+    $l = New-AiLabel $text 'Text' $AiFont
+    $l.Name = 'bg:Sel'; $l.BackColor = $Theme.Sel
+    $p.Controls.Add($l)
+    Add-AiItem 'user' $p
+}
+function Add-AiNote([string]$t) { Add-AiItem 'note' (New-AiLabel $t 'Muted' $AiSmall) }
+function Add-AiError([string]$t) {
+    $l = New-AiLabel "✗  $t" 'Err' $AiSmall
+    $l.Name = 'bg:ErrBg'; $l.BackColor = $Theme.ErrBg; $l.Padding = New-Object System.Windows.Forms.Padding(10, 7, 10, 7)
+    Add-AiItem 'err' $l
+}
+# Thao tác tool liên tiếp gom thành 1 dòng tóm tắt (như "Ran 2 commands, read X" của Claude desktop), bấm để xem chi tiết
+$AiToolVerb = @{ Read = 'đọc'; Glob = 'đọc'; Grep = 'tìm'; LS = 'đọc'; read_file = 'đọc'; list_directory = 'đọc'; search_file_content = 'tìm'
+                 Edit = 'sửa'; MultiEdit = 'sửa'; Write = 'sửa'; NotebookEdit = 'sửa'; replace = 'sửa'; write_file = 'sửa'; 'Sửa file' = 'sửa'
+                 Bash = 'chạy'; 'Chạy lệnh' = 'chạy'; run_shell_command = 'chạy'; PowerShell = 'chạy' }
+function Add-AiTool([string]$name, [string]$detail) {
+    $last = if ($script:aiItems.Count) { $script:aiItems[$script:aiItems.Count - 1] } else { $null }
+    if (-not $last -or $last.Kind -ne 'act') {
+        $p = New-Object System.Windows.Forms.Panel
+        $p.Name = 'bg:Back'
+        $hd = New-AiLabel '' 'Muted' $AiSmall; $hd.Cursor = 'Hand'
+        $dt = New-AiLabel '' 'Muted' $AiMonoSmall; $dt.Visible = $false
+        $p.Controls.AddRange(@($hd, $dt))
+        $p.Tag = @{ Hd = $hd; Dt = $dt; Lines = New-Object System.Collections.ArrayList; Open = $false }
+        $hd.Add_Click({ param($s, $e) $st = $s.Parent.Tag; $st.Open = -not $st.Open; Update-AiActivity $s.Parent; Update-AiLayout })
+        Add-AiItem 'act' $p
+        $last = $script:aiItems[$script:aiItems.Count - 1]
+    }
+    [void]$last.Ctl.Tag.Lines.Add(@($name, $detail))
+    Update-AiActivity $last.Ctl
+    Update-AiLayout -Scroll:$script:aiStick
+}
+function Update-AiActivity($p) {
+    $st = $p.Tag
+    $cnt = [ordered]@{ chạy = 0; đọc = 0; tìm = 0; sửa = 0; khác = 0 }
+    foreach ($ln in $st.Lines) { $v = $AiToolVerb[$ln[0]]; if (-not $v) { $v = 'khác' }; $cnt[$v]++ }
+    $parts = @()
+    if ($cnt['chạy']) { $parts += "chạy $($cnt['chạy']) lệnh" }
+    if ($cnt['đọc']) { $parts += "đọc $($cnt['đọc']) file" }
+    if ($cnt['tìm']) { $parts += "tìm $($cnt['tìm']) lần" }
+    if ($cnt['sửa']) { $parts += "sửa $($cnt['sửa']) file" }
+    if ($cnt['khác']) { $parts += "$($cnt['khác']) thao tác khác" }
+    $sum = ($parts -join ', ')
+    if ($st.Lines.Count -eq 1 -and $st.Lines[0][1]) { $sum += ":  $($st.Lines[0][1])" }
+    $st.Hd.Text = $(if ($st.Open) { '▾  ' } else { '▸  ' }) + $sum.Substring(0, 1).ToUpper() + $sum.Substring(1)
+    $st.Dt.Text = (@($st.Lines | ForEach-Object { "$($_[0])  $($_[1])" }) -join "`n")
+    $st.Dt.Visible = $st.Open
+}
+# Xếp các phần tử vào cột giữa (rộng tối đa 780px), cuộn theo nội dung
+function Get-AiCol { $w = $aiChat.ClientSize.Width; $cw = [math]::Max(240, [math]::Min(780, $w - 64)); @([int](($w - $cw) / 2), [int]$cw) }
+function Update-AiLayout([switch]$Scroll) {
+    if ($script:aiLaying) { $script:aiRelayout = $true; return }
+    $script:aiLaying = $true
+    $n = 0
+    do {
+        $script:aiRelayout = $false
+        $col = Get-AiCol; $cx = $col[0]; $cw = $col[1]
+        $oy = $aiChat.AutoScrollPosition.Y
+        $y = 22
+        $empty = -not $script:aiItems.Count
+        foreach ($l in @($lblAiEmptyIcon, $lblAiEmptyTitle, $lblAiEmptySub)) { $l.Visible = $empty }
+        if ($empty) {
+            # AutoSize label co theo MaximumSize ngay khi gán -> dùng Width / Height thật để căn giữa (không tràn ngang)
+            $lblAiEmptySub.MaximumSize = New-Object System.Drawing.Size($cw, 0); $lblAiEmptyTitle.MaximumSize = New-Object System.Drawing.Size($cw, 0)
+            $hh = 40 + $lblAiEmptyTitle.Height + 10 + $lblAiEmptySub.Height
+            $y = [math]::Max(30, [int](($aiChat.ClientSize.Height - $hh) / 2) - 30)
+            $lblAiEmptyIcon.Location = New-Object System.Drawing.Point(([int]($aiChat.ClientSize.Width / 2) - 16), $y)
+            $lblAiEmptyTitle.Location = New-Object System.Drawing.Point(($cx + [int](($cw - $lblAiEmptyTitle.Width) / 2)), ($y + 42))
+            $lblAiEmptySub.Location = New-Object System.Drawing.Point(($cx + [int](($cw - $lblAiEmptySub.Width) / 2)), ($y + 52 + $lblAiEmptyTitle.Height))
+            $y += $hh
+        }
+        foreach ($it in $script:aiItems) {
+            $c = $it.Ctl
+            switch ($it.Kind) {
+                'user' {
+                    $l = $c.Controls[0]
+                    $l.MaximumSize = New-Object System.Drawing.Size(([int]($cw * 0.8) - 32), 0)
+                    $sz = $l.PreferredSize
+                    $l.Location = New-Object System.Drawing.Point(16, 10)
+                    $c.SetBounds(($cx + $cw - $sz.Width - 32), ($oy + $y), ($sz.Width + 32), ($sz.Height + 20))
+                }
+                'md' { $c.SetBounds($cx, ($oy + $y), $cw, ([math]::Max(18, [int]$c.Tag.H) + 4)) }
+                'act' {
+                    $st = $c.Tag
+                    $st.Hd.MaximumSize = New-Object System.Drawing.Size($cw, 0); $st.Hd.Location = New-Object System.Drawing.Point(0, 2)
+                    $h = $st.Hd.PreferredHeight + 4
+                    if ($st.Open) { $st.Dt.MaximumSize = New-Object System.Drawing.Size(($cw - 20), 0); $st.Dt.Location = New-Object System.Drawing.Point(20, $h); $h += $st.Dt.PreferredSize.Height + 4 }
+                    $c.SetBounds($cx, ($oy + $y), $cw, $h)
+                }
+                default { $c.MaximumSize = New-Object System.Drawing.Size($cw, 0); $c.Location = New-Object System.Drawing.Point($cx, ($oy + $y)) }
+            }
+            $y += $c.Height + $(if ($it.Kind -eq 'user') { 18 } else { 8 })
+        }
+        $lblAiState.Visible = [bool]$lblAiState.Text
+        if ($lblAiState.Visible) { $lblAiState.Location = New-Object System.Drawing.Point($cx, ($oy + $y + 4)); $y += 34 }
+        $aiChat.AutoScrollMinSize = New-Object System.Drawing.Size(0, ($y + 20))
+    } while ($script:aiRelayout -and ++$n -lt 3)
+    $script:aiLaying = $false
+    if ($Scroll) { $aiChat.AutoScrollPosition = New-Object System.Drawing.Point(0, ($y + 200)) }
+}
+# Đổi theme: chữ trong câu trả lời có màu cố định -> vẽ lại từ các đoạn đã lưu
+function Update-AiTheme {
+    foreach ($it in $script:aiItems) {
+        if ($it.Kind -ne 'md') { continue }
+        $r = $it.Ctl; $r.Clear()
+        foreach ($x in @($r.Tag.Runs)) { Add-AiRun $x[0] $x[1] $x[2] $x[3] -NoLog -rtb $r }
+    }
+    Update-AiChips
+    foreach ($c in @($aiTop, $aiCtx, $aiInBox)) { $c.Invalidate() }
+}
 function Add-AiInline([string]$line, [int]$indent) {
     foreach ($part in [regex]::Split($line, '(\*\*[^*]+\*\*|`[^`]+`)')) {
         if (-not $part) { continue }
@@ -3127,10 +3344,10 @@ function Add-AiMarkdown([string]$text) {
     $code = $false
     foreach ($ln in (($text -replace "`r", '').Trim("`n") -split "`n")) {
         if ($ln -match '^\s*```') { $code = -not $code; continue }
-        if ($code) { Add-AiRun "$ln`n" 'Text' $AiMono 32; continue }
-        if ($ln -match '^\s{0,3}#{1,6}\s+(.*)$') { Add-AiRun "$($Matches[1])`n" 'Text' $AiBold 18; continue }
-        $ind = 18
-        if ($ln -match '^(\s*)[-*+]\s+(.*)$') { $ind = 18 + 8 * [math]::Min(4, $Matches[1].Length); $rest = $Matches[2]; Add-AiRun '•  ' 'Accent' $AiFont $ind; $ln = $rest }
+        if ($code) { Add-AiRun "$ln`n" 'Text' $AiMono 16; continue }
+        if ($ln -match '^\s{0,3}#{1,6}\s+(.*)$') { Add-AiRun "$($Matches[1])`n" 'Text' $AiHead 0; continue }
+        $ind = 0
+        if ($ln -match '^(\s*)[-*+]\s+(.*)$') { $ind = 6 + 10 * [math]::Min(4, $Matches[1].Length); $rest = $Matches[2]; Add-AiRun '•  ' 'Accent' $AiFont $ind; $ln = $rest }
         Add-AiInline $ln $ind
         Add-AiRun "`n" 'Text' $AiFont $ind
     }
@@ -3155,7 +3372,7 @@ function Get-AiId([string]$id) { $id.Substring(0, [math]::Min(8, $id.Length)) }
 function Show-ClaudeEvent($j) {
     switch ($j.type) {
         'system' {
-            if ($j.subtype -eq 'init' -and $j.session_id) { $script:ai.Session = $j.session_id; Add-AiNote "phiên $(Get-AiId $j.session_id) · $($j.model)" }
+            if ($j.subtype -eq 'init' -and $j.session_id) { $script:ai.Session = $j.session_id }
         }
         'assistant' {
             foreach ($c in @($j.message.content)) {
@@ -3187,7 +3404,7 @@ function Show-CodexEvent($j) {
         return
     }
     switch ($j.type) {
-        'thread.started' { $script:ai.Session = $j.thread_id; Add-AiNote "phiên $(Get-AiId $j.thread_id)" }
+        'thread.started' { $script:ai.Session = $j.thread_id }
         'item.started' { if ($j.item.type -eq 'command_execution') { Add-AiTool 'Chạy lệnh' (Get-AiShort $j.item.command) } }
         'item.completed' {
             $it = $j.item
@@ -3213,7 +3430,7 @@ function Show-GeminiEvent($j) {
     }
     Flush-AiBuffer
     switch ($j.type) {
-        'init' { if ($j.session_id) { $script:ai.Session = $j.session_id; Add-AiNote "phiên $(Get-AiId $j.session_id) · $($j.model)" } }
+        'init' { if ($j.session_id) { $script:ai.Session = $j.session_id } }
         'tool_use' { Add-AiTool $j.tool_name (Get-AiToolSummary $j.parameters) }
         'tool_result' { if ($j.status -eq 'error') { Add-AiError (Get-AiShort $(if ($j.error.message) { $j.error.message } else { $j.output })) } }
         'error' { Add-AiError $j.message }
@@ -3228,65 +3445,225 @@ function Show-AiEvent([string]$line) {
     if (-not $t) { return }
     $j = $null
     if ($t.StartsWith('{')) { try { $j = $t | ConvertFrom-Json } catch { } }
-    if (-not $j) { Flush-AiBuffer; Add-AiRun "$line`n" 'Muted' $AiMono 18; return }
+    if (-not $j) { Flush-AiBuffer; Add-AiNote $line; return }
     switch ($script:aiRun.Tool) { 'claude' { Show-ClaudeEvent $j } 'codex' { Show-CodexEvent $j } 'gemini' { Show-GeminiEvent $j } }
 }
 
-# ---- Giao diện tab ----
-New-Label 'Công cụ' 12 14 60 $pageAi | Out-Null
+# ---- Giao diện tab (bố cục kiểu Claude desktop) ----
+#   trên: tiêu đề phiên + chip thư mục | Phiên mới · Mở terminal · ⋯
+#   giữa: khung chat cột giữa          dưới: dải repo (nhánh, +/-) và ô soạn có chip công cụ / quyền / model + nút gửi tròn
+# Lựa chọn công cụ / thư mục / quyền / model vẫn nằm trong các ComboBox ẩn (giữ logic cũ); chip chỉ là mặt hiển thị.
 $cbAiTool = New-Object System.Windows.Forms.ComboBox
-$cbAiTool.DropDownStyle = 'DropDownList'; $cbAiTool.SetBounds(72, 10, 150, 28)
+$cbAiTool.DropDownStyle = 'DropDownList'
 foreach ($t in $AiTools.Values) { [void]$cbAiTool.Items.Add($t.Name) }
-$pageAi.Controls.Add($cbAiTool)
-$lblAiDir = New-Label 'Thư mục' 234 14 60 $pageAi
 $cbAiDir = New-Object System.Windows.Forms.ComboBox
-$cbAiDir.DropDownStyle = 'DropDownList'; $cbAiDir.SetBounds(296, 10, 214, 28)
-$pageAi.Controls.Add($cbAiDir)
-New-Label 'Quyền' 12 48 60 $pageAi | Out-Null
+$cbAiDir.DropDownStyle = 'DropDownList'
 $cbAiMode = New-Object System.Windows.Forms.ComboBox
-$cbAiMode.DropDownStyle = 'DropDownList'; $cbAiMode.SetBounds(72, 44, 262, 28)
-[void]$cbAiMode.Items.AddRange(@('Chỉ đọc / hỏi đáp (không sửa file)', 'Cho phép sửa file trong thư mục', 'Toàn quyền (sửa file + chạy lệnh)'))
+$cbAiMode.DropDownStyle = 'DropDownList'
+[void]$cbAiMode.Items.AddRange(@('Chỉ đọc', 'Cho sửa file', 'Toàn quyền'))
 $cbAiMode.SelectedIndex = [math]::Min(2, [math]::Max(0, [int]$PanelConfig.aiMode))
-$pageAi.Controls.Add($cbAiMode)
-$lblAiModel = New-Label 'Model' 344 48 48 $pageAi
 $cbAiModel = New-Object System.Windows.Forms.ComboBox
-$cbAiModel.DropDownStyle = 'DropDown'; $cbAiModel.SetBounds(394, 44, 116, 28)
-$pageAi.Controls.Add($cbAiModel)
-$tipDoc.SetToolTip($cbAiModel, 'Để trống = model mặc định của CLI. Có thể gõ tên model bất kỳ.')
-# Khung chat và ô nhập: ô chữ không viền đặt trong khung bo góc; nút Gửi / Dừng nằm trong ô nhập (góc phải dưới)
-$aiLogBox = New-CardHost 12 80 498 276 $pageAi
-$aiLogBox.Padding = New-Object System.Windows.Forms.Padding(10, 8, 4, 8)
-$rtbAi = New-Object System.Windows.Forms.RichTextBox
-$rtbAi.ReadOnly = $true; $rtbAi.DetectUrls = $true; $rtbAi.ScrollBars = 'Vertical'; $rtbAi.HideSelection = $false
-$rtbAi.BorderStyle = 'None'; $rtbAi.Dock = 'Fill'; $rtbAi.Font = $AiFont; $rtbAi.BackColor = $Theme.Surface
-$rtbAi.Add_LinkClicked({ param($sender, $e) Start-Process $e.LinkText })
-$aiLogBox.Controls.Add($rtbAi)
-$aiInBox = New-CardHost 12 384 498 66 $pageAi
+$cbAiModel.DropDownStyle = 'DropDown'
+foreach ($c in @($cbAiTool, $cbAiDir, $cbAiMode, $cbAiModel)) { $c.Visible = $false; $pageAi.Controls.Add($c) }
+
+# Chip: nút phẳng không viền, nền theo nền cha, sáng lên khi rê chuột (Set-ControlTheme nhận ra nhờ Tag 'chip')
+function New-AiChip([string]$text, $parent, [scriptblock]$onClick) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $text; $b.Tag = 'chip'; $b.AutoSize = $true; $b.AutoSizeMode = 'GrowAndShrink'; $b.Font = $AiSmall
+    $b.Padding = New-Object System.Windows.Forms.Padding(6, 3, 6, 3); $b.ImageAlign = 'MiddleLeft'; $b.TextImageRelation = 'ImageBeforeText'
+    $b.Add_Click($onClick); $parent.Controls.Add($b)
+    $b
+}
+function Get-DotBitmap([System.Drawing.Color]$c) {
+    $k = "dot|$($c.ToArgb())"
+    if (-not $script:iconCache.ContainsKey($k)) {
+        $bmp = New-Object System.Drawing.Bitmap(16, 16); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.SmoothingMode = 'AntiAlias'
+        $b = New-Object System.Drawing.SolidBrush($c); $g.FillEllipse($b, 3, 3, 10, 10); $b.Dispose(); $g.Dispose()
+        $script:iconCache[$k] = $bmp
+    }
+    $script:iconCache[$k]
+}
+# Menu xổ từ chip: mỗi mục @{ Text; Click; Arg; Checked }, chuỗi '-' = vạch ngăn
+function Show-AiMenu($btn, $items, [switch]$Up) {
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    foreach ($i in $items) {
+        if ($i -is [string]) { [void]$m.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)); continue }
+        $mi = New-ThemedMenuItem $i.Text $i.Click
+        $mi.Tag = $i.Arg; $mi.Checked = [bool]$i.Checked
+        [void]$m.Items.Add($mi)
+    }
+    Set-MenuTheme $m $Theme $Theme ($script:ThemeName -eq 'dark')
+    $y = if ($Up) { -$m.GetPreferredSize([System.Drawing.Size]::Empty).Height } else { $btn.Height }
+    $m.Show($btn, (New-Object System.Drawing.Point(0, $y)))
+}
+
+# Thanh trên
+$aiTop = New-Object System.Windows.Forms.Panel
+$aiTop.Dock = 'Top'; $aiTop.Height = 52; $aiTop.Name = 'bg:Back'
+$aiTop.Add_Paint({ param($s, $e) $p = New-Object System.Drawing.Pen($Theme.Border); $e.Graphics.DrawLine($p, 0, ($s.Height - 1), $s.Width, ($s.Height - 1)); $p.Dispose() })
+$lblAiTitle = New-AiLabel 'Phiên mới' 'Text' (New-Object System.Drawing.Font('Segoe UI Semibold', 11.5))
+$aiTop.Controls.Add($lblAiTitle)
+$btnAiDir = New-AiChip 'Chọn thư mục' $aiTop {
+    $items = @(for ($i = 0; $i -lt $cbAiDir.Items.Count; $i++) {
+        if ($i -eq $cbAiDir.Items.Count - 1) { '-' }
+        @{ Text = [string]$cbAiDir.Items[$i]; Arg = $i; Checked = ($i -eq $cbAiDir.SelectedIndex); Click = { param($s, $e) $cbAiDir.SelectedIndex = [int]$s.Tag } }
+    })
+    Show-AiMenu $btnAiDir $items
+}
+$btnAiNew = New-AiChip 'Phiên mới' $aiTop { $script:ai.Session = $null; $script:ai.Key = ''; $script:ai.Title = $null; Clear-AiChat; Show-AiWelcome; Update-AiUi }
+$btnAiTerm = New-AiChip 'Mở terminal' $aiTop { Open-AiTerminal }
+$btnAiMore = New-AiChip '•••' $aiTop {
+    $items = @(
+        @{ Text = 'Xem thay đổi / Commit…'; Click = { Show-AiChanges } },
+        @{ Text = 'Mở thư mục'; Click = { $d = Get-AiDir; if ($d) { Start-Process explorer.exe "`"$d`"" } } }
+    )
+    if ($CodeCmd) { $items += @{ Text = 'Mở bằng VS Code'; Click = { $d = Get-AiDir; if ($d) { Start-Process $CodeCmd -ArgumentList "`"$d`"" -WindowStyle Hidden } } } }
+    $items += '-'
+    $items += @{ Text = 'Cài / cập nhật CLI…'; Click = { Install-AiCli } }
+    Show-AiMenu $btnAiMore $items
+}
+function Update-AiTop {
+    $lblAiTitle.MaximumSize = New-Object System.Drawing.Size([math]::Max(100, $aiTop.Width - 520), 0); $lblAiTitle.AutoEllipsis = $true
+    $lblAiTitle.Location = New-Object System.Drawing.Point(22, [int](($aiTop.Height - $lblAiTitle.Height) / 2))
+    $btnAiDir.Location = New-Object System.Drawing.Point(($lblAiTitle.Right + 10), [int](($aiTop.Height - $btnAiDir.Height) / 2))
+    $x = $aiTop.Width - 16
+    foreach ($b in @($btnAiMore, $btnAiTerm, $btnAiNew)) { $x -= $b.Width; $b.Location = New-Object System.Drawing.Point($x, [int](($aiTop.Height - $b.Height) / 2)); $x -= 4 }
+}
+$aiTop.Add_Resize({ Update-AiTop })
+
+# Khung chat
+$aiChat = New-Object System.Windows.Forms.Panel
+$aiChat.Dock = 'Fill'; $aiChat.Name = 'bg:Back'
+# chỉ cuộn dọc: nội dung luôn xếp vừa bề ngang
+$aiChat.HorizontalScroll.Enabled = $false; $aiChat.HorizontalScroll.Visible = $false; $aiChat.HorizontalScroll.Maximum = 0
+$aiChat.AutoScroll = $true
+Set-DoubleBuffered $aiChat
+$aiChat.Add_Resize({ Update-AiLayout })
+$lblAiEmptyIcon = New-Object System.Windows.Forms.Label
+$lblAiEmptyIcon.Size = New-Object System.Drawing.Size(32, 32)
+$lblAiEmptyTitle = New-AiLabel 'Hôm nay mình code gì nào?' 'Text' (New-Object System.Drawing.Font('Segoe UI Semibold', 17))
+$lblAiEmptySub = New-AiLabel '' 'Muted' $AiFont
+$lblAiEmptySub.TextAlign = 'TopCenter'
+$lblAiState = New-AiLabel '' 'Info' $AiSmall
+$aiChat.Controls.AddRange(@($lblAiEmptyIcon, $lblAiEmptyTitle, $lblAiEmptySub, $lblAiState))
+
+# Phần dưới: dải repo + ô soạn
+$aiBottom = New-Object System.Windows.Forms.Panel
+$aiBottom.Dock = 'Bottom'; $aiBottom.Height = 140; $aiBottom.Name = 'bg:Back'
+$aiInBox = New-CardHost 0 32 600 100 $aiBottom
+$aiInBox.Name = 'bg:Surface'
+$aiCtx = New-Object System.Windows.Forms.Panel
+$aiCtx.Name = 'bg:Back'; Set-DoubleBuffered $aiCtx
+$aiBottom.Controls.Add($aiCtx); $aiInBox.BringToFront()
+$script:aiCtxInfo = $null; $script:aiCtxLink = $null
+$aiCtx.Add_Paint({
+    param($s, $e)
+    $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'; $g.Clear($s.Parent.BackColor)
+    $p = New-RoundRect 0 0 ($s.Width - 1) ($s.Height + 10) 10
+    $b = New-Object System.Drawing.SolidBrush($Theme.Header); $g.FillPath($b, $p); $b.Dispose()
+    $pen = New-Object System.Drawing.Pen($Theme.Border); $g.DrawPath($pen, $p); $pen.Dispose(); $p.Dispose()
+    $h = $s.Height - 4; $x = 12
+    $flags = [System.Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, NoPadding, EndEllipsis'
+    function Seg([string]$t, $c, [string]$icon) {
+        if ($icon -and $IconFontName) { $g.DrawImage((Get-IconBitmap $icon $Theme.Muted), $x, [int](($h - 16) / 2), 16, 16); $script:segX = $x + 20 } else { $script:segX = $x }
+        $w = [System.Windows.Forms.TextRenderer]::MeasureText($t, $AiSmall, [System.Drawing.Size]::Empty, [System.Windows.Forms.TextFormatFlags]::NoPadding).Width
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $t, $AiSmall, (New-Object System.Drawing.Rectangle($script:segX, 0, ($w + 2), $h)), $c, $flags)
+        $script:segX + $w + 14
+    }
+    $d = Get-AiDir
+    $x = Seg $(if ($d) { Split-Path $d -Leaf } else { 'Chưa chọn thư mục' }) $Theme.Text 'E8B7'
+    $ci = $script:aiCtxInfo
+    if ($ci -and $ci.Repo) {
+        $x = Seg $ci.Branch $Theme.Text 'F003'
+        if ($ci.Add -or $ci.Del) { $x = Seg "+$($ci.Add)" $Theme.Ok ''; $x -= 8; $x = Seg "−$($ci.Del)" $Theme.Err '' }
+        if ($ci.New) { $x = Seg "$($ci.New) file mới" $Theme.Muted '' }
+        if (-not ($ci.Add -or $ci.Del -or $ci.New)) { $x = Seg 'không có thay đổi' $Theme.Muted '' }
+        $lt = 'Xem thay đổi / Commit  ›'
+        $lw = [System.Windows.Forms.TextRenderer]::MeasureText($lt, $AiSmall).Width
+        $script:aiCtxLink = New-Object System.Drawing.Rectangle(($s.Width - $lw - 12), 0, $lw, $h)
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $lt, $AiSmall, $script:aiCtxLink, $Theme.Accent, $flags)
+    } elseif ($ci) { [void](Seg 'không phải git repo' $Theme.Muted ''); $script:aiCtxLink = $null }
+})
+$aiCtx.Add_MouseMove({ param($s, $e) $s.Cursor = $(if ($script:aiCtxLink -and $script:aiCtxLink.Contains($e.Location)) { 'Hand' } else { 'Default' }) })
+$aiCtx.Add_MouseDown({ param($s, $e) if ($script:aiCtxLink -and $script:aiCtxLink.Contains($e.Location)) { Show-AiChanges } })
+
 $txtAiIn = New-Object System.Windows.Forms.TextBox
-$txtAiIn.Multiline = $true; $txtAiIn.AcceptsReturn = $true; $txtAiIn.BorderStyle = 'None'
-$txtAiIn.SetBounds(14, 10, 380, 48); $txtAiIn.Font = New-Object System.Drawing.Font('Segoe UI', 10.5); $txtAiIn.Anchor = 'Top, Bottom, Left, Right'
+$txtAiIn.Multiline = $true; $txtAiIn.AcceptsReturn = $true; $txtAiIn.BorderStyle = 'None'; $txtAiIn.WordWrap = $true
+$txtAiIn.Font = New-Object System.Drawing.Font('Segoe UI', 10.5)
 $aiInBox.Controls.Add($txtAiIn)
-$lblAiHint = New-Object System.Windows.Forms.Label
-$lblAiHint.Text = 'Mô tả việc cần làm, vd: "Thêm API lọc đơn hàng theo trạng thái"   ·   Ctrl+Enter để gửi'
-$lblAiHint.AutoSize = $true; $lblAiHint.Location = New-Object System.Drawing.Point(1, 2); $lblAiHint.ForeColor = $Theme.Muted; $lblAiHint.Cursor = 'IBeam'
+$lblAiHint = New-AiLabel 'Giao việc cho AI, vd: "Thêm API lọc đơn hàng theo trạng thái"   (Enter gửi · Shift+Enter xuống dòng)' 'Muted' $txtAiIn.Font
+$lblAiHint.Location = New-Object System.Drawing.Point(1, 1); $lblAiHint.Cursor = 'IBeam'
 $lblAiHint.Add_Click({ [void]$txtAiIn.Focus() })
 $txtAiIn.Controls.Add($lblAiHint)
-$txtAiIn.Add_TextChanged({ $lblAiHint.Visible = -not $txtAiIn.TextLength })
+$script:aiInLines = 0
+$txtAiIn.Add_TextChanged({
+    $lblAiHint.Visible = -not $txtAiIn.TextLength
+    $n = $txtAiIn.GetLineFromCharIndex($txtAiIn.TextLength) + 1
+    if ($n -ne $script:aiInLines) { $script:aiInLines = $n; Update-AiBottom }
+})
 $txtAiIn.Add_GotFocus({ $aiInBox.Invalidate() }); $txtAiIn.Add_LostFocus({ $aiInBox.Invalidate() })
-$btnAiSend = New-Button 'Gửi' 402 17 84 $aiInBox { Send-AiPrompt }
-$btnAiSend.Tag = 'primary'; $btnAiSend.Anchor = 'Bottom, Right'
-$btnAiStop = New-Button 'Dừng' 402 17 84 $aiInBox { Stop-AiRun }
-$btnAiStop.Anchor = 'Bottom, Right'; $btnAiStop.Visible = $false
-New-Button 'Phiên mới' 12 456 100 $pageAi { $script:ai.Session = $null; $script:ai.Key = ''; $script:aiRuns.Clear(); $rtbAi.Clear(); Show-AiWelcome; Update-AiUi } | Out-Null
-New-Button 'Xem thay đổi / Commit…' 284 456 180 $pageAi { Show-AiChanges } | Out-Null
-New-Button 'Mở terminal' 468 456 120 $pageAi { Open-AiTerminal } | Out-Null
-New-Button 'Cài / cập nhật CLI' 592 456 150 $pageAi { Install-AiCli } | Out-Null
-$lblAiState = New-Label '' 12 361 498 $pageAi
-$lblAiState.ForeColor = $Theme.Muted; $lblAiState.AutoEllipsis = $true
+$txtAiIn.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Enter' -and -not $e.Shift) { $e.SuppressKeyPress = $true; Send-AiPrompt } })
+$btnAiTool = New-AiChip 'Claude Code' $aiInBox {
+    $items = @(for ($i = 0; $i -lt $cbAiTool.Items.Count; $i++) {
+        $t = @($AiTools.Values)[$i]
+        @{ Text = $t.Name + $(if (Find-AiExe $t.Exe) { '' } else { '   (chưa cài)' }); Arg = $i; Checked = ($i -eq $cbAiTool.SelectedIndex); Click = { param($s, $e) $cbAiTool.SelectedIndex = [int]$s.Tag } }
+    })
+    $items += '-'
+    $items += @{ Text = 'Cài / cập nhật CLI…'; Click = { Install-AiCli } }
+    Show-AiMenu $btnAiTool $items -Up
+}
+$btnAiMode = New-AiChip 'Cho sửa file' $aiInBox {
+    $desc = @('Chỉ đọc  —  hỏi đáp, lên kế hoạch, không sửa file', 'Cho sửa file  —  AI sửa code trong thư mục, không chạy lệnh', 'Toàn quyền  —  sửa file và chạy mọi lệnh không hỏi lại')
+    Show-AiMenu $btnAiMode @(for ($i = 0; $i -lt 3; $i++) { @{ Text = $desc[$i]; Arg = $i; Checked = ($i -eq $cbAiMode.SelectedIndex); Click = { param($s, $e) $cbAiMode.SelectedIndex = [int]$s.Tag; Update-AiChips } } }) -Up
+}
+$btnAiModel = New-AiChip 'Model mặc định' $aiInBox {
+    $setModel = { param($s, $e) $cbAiModel.Text = [string]$s.Tag; $PanelConfig.aiModel = $cbAiModel.Text; Save-PanelConfig $PanelConfig; Update-AiChips }
+    $items = @(@{ Text = 'Mặc định của CLI'; Arg = ''; Checked = (-not $cbAiModel.Text); Click = $setModel })
+    foreach ($m in @($AiTools[(Get-AiToolKey)].Models)) { $items += @{ Text = $m; Arg = $m; Checked = ($cbAiModel.Text -eq $m); Click = $setModel } }
+    $items += '-'
+    $items += @{ Text = 'Nhập tên model khác…'; Click = {
+        $v = [Microsoft.VisualBasic.Interaction]::InputBox('Tên model (để trống = mặc định của CLI):', 'Model', $cbAiModel.Text)
+        if ($v -match '^[\w.:/@-]*$') { $cbAiModel.Text = $v.Trim(); $PanelConfig.aiModel = $cbAiModel.Text; Save-PanelConfig $PanelConfig; Update-AiChips }
+    } }
+    Show-AiMenu $btnAiModel $items -Up
+}
+# Nút gửi / dừng tròn màu nhấn ở góc phải ô soạn
+$btnAiSend = New-Button '' 0 0 34 $aiInBox { Send-AiPrompt }
+$btnAiStop = New-Button '' 0 0 34 $aiInBox { Stop-AiRun }
+foreach ($b in @($btnAiSend, $btnAiStop)) {
+    $b.Tag = 'primary'; $b.Height = 34
+    $ep = New-Object System.Drawing.Drawing2D.GraphicsPath; $ep.AddEllipse(0, 0, 34, 34); $b.Region = New-Object System.Drawing.Region($ep)
+}
+Set-ObjIcon $btnAiSend 'E724' 'AccentText'; Set-ObjIcon $btnAiStop 'E71A' 'AccentText'
+foreach ($b in @($btnAiSend, $btnAiStop)) { $b.ImageAlign = 'MiddleCenter'; $b.Width = 34 }
+$btnAiStop.Visible = $false
+$tipDoc.SetToolTip($btnAiSend, 'Gửi (Enter)'); $tipDoc.SetToolTip($btnAiStop, 'Dừng')
+$pageAi.Controls.AddRange(@($aiChat, $aiBottom, $aiTop))
+$aiChat.BringToFront()        # Dock Fill phải xếp sau Top / Bottom
+
+function Update-AiBottom {
+    $w = $aiBottom.ClientSize.Width
+    if ($w -lt 100) { return }
+    $cw = [math]::Max(240, [math]::Min(780, $w - 64)); $cx = [int](($w - $cw) / 2)
+    $lines = [math]::Min(8, [math]::Max(2, $txtAiIn.GetLineFromCharIndex($txtAiIn.TextLength) + 1))
+    $th = $lines * $txtAiIn.Font.Height + 4
+    $ih = $th + 60
+    $aiCtx.SetBounds(($cx + 16), 4, ($cw - 32), 34)
+    $aiInBox.SetBounds($cx, 34, $cw, $ih)
+    $aiBottom.Height = 34 + $ih + 16
+    $txtAiIn.SetBounds(18, 14, ($cw - 36), $th)
+    $ry = 14 + $th + 10
+    $btnAiTool.Location = New-Object System.Drawing.Point(10, $ry)
+    $btnAiMode.Location = New-Object System.Drawing.Point(($btnAiTool.Right + 2), $ry)
+    foreach ($b in @($btnAiSend, $btnAiStop)) { $b.Location = New-Object System.Drawing.Point(($cw - 46), ($ry - 3)) }
+    $btnAiModel.Location = New-Object System.Drawing.Point(($btnAiSend.Left - $btnAiModel.Width - 6), $ry)
+    $aiCtx.Invalidate(); $aiInBox.Invalidate()
+}
+$aiBottom.Add_Resize({ Update-AiBottom })
 
 function Get-AiToolKey { @($AiTools.Keys)[[math]::Max(0, $cbAiTool.SelectedIndex)] }
 function Get-AiDir { if ($cbAiDir.SelectedIndex -ge 0 -and $cbAiDir.SelectedIndex -lt $cbAiDir.Items.Count - 1) { [string]$cbAiDir.SelectedItem } else { $null } }
-$AiPickDir = '… Chọn thư mục khác'
+$AiPickDir = 'Chọn thư mục khác…'
 $script:aiDirFilling = $false
 # Thư mục: dùng gần đây -> repo trong tab Git -> thư mục app trong danh mục; mục cuối mở hộp chọn thư mục
 function Update-AiDirs([string]$want) {
@@ -3297,62 +3674,83 @@ function Update-AiDirs([string]$want) {
     }
     if ($want -and -not ($dirs -contains $want)) { $dirs.Insert(0, $want) }
     $script:aiDirFilling = $true
-    $cbAiDir.BeginUpdate(); $cbAiDir.Items.Clear()
+    $cbAiDir.Items.Clear()
     foreach ($d in $dirs) { [void]$cbAiDir.Items.Add($d) }
     [void]$cbAiDir.Items.Add($AiPickDir)
-    $cbAiDir.EndUpdate()
     $i = -1
     if ($want) { for ($k = 0; $k -lt $dirs.Count; $k++) { if ($dirs[$k] -eq $want) { $i = $k; break } } }      # -eq không phân biệt hoa thường
     $cbAiDir.SelectedIndex = $(if ($i -ge 0) { $i } elseif ($dirs.Count) { 0 } else { -1 })
     $script:aiDirFilling = $false
+    Update-AiChips; Update-AiContext
 }
 $cbAiDir.Add_SelectedIndexChanged({
-    if ($script:aiDirFilling -or $cbAiDir.SelectedIndex -ne $cbAiDir.Items.Count - 1) { return }
+    if ($script:aiDirFilling) { return }
+    if ($cbAiDir.SelectedIndex -ne $cbAiDir.Items.Count - 1) { Update-AiChips; Update-AiContext; return }
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = 'Chọn thư mục project để AI làm việc'
     $pick = if ($dlg.ShowDialog() -eq 'OK') { $dlg.SelectedPath } else { $null }
     Update-AiDirs $pick
 })
+# Dải repo: nhánh + số dòng thêm / bớt so với HEAD + file mới (đọc ở nền)
+function Update-AiContext([switch]$Note) {
+    $d = Get-AiDir
+    $script:aiCtxInfo = $null; $aiCtx.Invalidate()
+    if (-not $d) { return }
+    Start-CoreAsync 'Get-RepoWorkSummary $p.Dir' @{ Dir = $d } {
+        param($r, $ctx)
+        if ($ctx.Dir -ne (Get-AiDir) -or -not $r.Ok) { return }
+        $script:aiCtxInfo = $r.Value; $aiCtx.Invalidate()
+        $v = $r.Value
+        if ($ctx.Note -and $v.Repo -and ($v.Add -or $v.Del -or $v.New)) { Add-AiNote "Thư mục đang có thay đổi: +$($v.Add) −$($v.Del)$(if ($v.New) { " · $($v.New) file mới" }) - bấm ""Xem thay đổi / Commit"" ở dưới để review." }
+    } @{ Dir = $d; Note = [bool]$Note }
+}
+function Update-AiChips {
+    $t = $AiTools[(Get-AiToolKey)]
+    $btnAiTool.Text = "$($t.Name) ▾"; $btnAiTool.Image = Get-DotBitmap $t.Color
+    $mi = [math]::Max(0, $cbAiMode.SelectedIndex)
+    $btnAiMode.Text = "$(@('Chỉ đọc', 'Cho sửa file', 'Toàn quyền')[$mi]) ▾"
+    if ($IconFontName) { $btnAiMode.Image = Get-IconBitmap @('E7B3', 'E70F', 'E7BA')[$mi] $(if ($mi -eq 2) { $Theme.Warn } else { $Theme.Muted }) }
+    $btnAiModel.Text = $(if ($cbAiModel.Text) { $cbAiModel.Text } else { 'Model mặc định' }) + ' ▾'
+    $d = Get-AiDir
+    $btnAiDir.Text = $(if ($d) { Split-Path $d -Leaf } else { 'Chọn thư mục' }) + ' ▾'
+    if ($IconFontName) { $btnAiDir.Image = Get-IconBitmap 'E8B7' $Theme.Muted; $lblAiEmptyIcon.Image = Get-IconBitmap 'E99A' $Theme.Accent 32 }
+    $tipDoc.SetToolTip($btnAiDir, $(if ($d) { $d } else { '' }))
+    $lblAiTitle.Text = $(if ($script:ai.Title) { $script:ai.Title } else { 'Phiên mới' })
+    Update-AiTop; Update-AiBottom
+}
 function Update-AiModels {
-    $cur = $cbAiModel.Text
     $cbAiModel.Items.Clear()
     foreach ($m in @($AiTools[(Get-AiToolKey)].Models)) { [void]$cbAiModel.Items.Add($m) }
-    $cbAiModel.Text = $cur
 }
+# Màn hình trống / trạng thái cài đặt CLI
 function Show-AiWelcome {
     $t = $AiTools[(Get-AiToolKey)]
     $exe = Find-AiExe $t.Exe
-    Add-AiHeader $t.Name $t.Color
-    if ($exe) {
-        Add-AiNote "Đã cài: $exe"
-        Add-AiNote 'Chọn thư mục project, gõ yêu cầu bên dưới rồi Ctrl+Enter. Các lượt sau tiếp tục cùng phiên (bấm Phiên mới để bắt đầu lại).'
-        Add-AiNote 'Lần đầu dùng: bấm "Mở terminal" để đăng nhập CLI. Sửa xong bấm "Xem thay đổi / Commit…" để review diff và commit.'
-    } else {
-        Add-AiError "Chưa cài $($t.Name) trên máy này."
-        Add-AiNote "Bấm ""Cài / cập nhật CLI"" (cần Node.js) hoặc chạy: npm install -g $($t.Pkg)"
-    }
-    $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.ScrollToCaret()
+    $lblAiEmptySub.Text = if ($exe) {
+        "$($t.Name) sẵn sàng. Chọn thư mục ở trên, giao việc ở ô bên dưới - AI đọc / sửa code ngay trong thư mục đó.`n" +
+        "Lần đầu dùng: bấm ""Mở terminal"" để đăng nhập CLI.  Sửa xong: ""Xem thay đổi / Commit"" để review diff rồi commit."
+    } else { "Máy này chưa cài $($t.Name).`nBấm chip ""$($t.Name)"" ở ô soạn → ""Cài / cập nhật CLI"" (cần Node.js), hoặc chạy: npm install -g $($t.Pkg)" }
+    $lblAiEmptySub.ForeColor = $(if ($exe) { $Theme.Muted } else { $Theme.Warn })
+    if (-not $exe -and $script:aiItems.Count) { Add-AiError "Chưa cài $($t.Name) - chọn chip công cụ → Cài / cập nhật CLI." }
+    Update-AiChips; Update-AiLayout
 }
 function Update-AiUi {
     $busy = [bool]$script:aiRun
     $btnAiSend.Visible = -not $busy; $btnAiStop.Visible = $busy
-    foreach ($c in @($cbAiTool, $cbAiDir, $cbAiMode, $cbAiModel)) { $c.Enabled = -not $busy }
-    if (-not $busy) {
-        $lblAiState.Text = $(if ($script:ai.Session) { "Đang tiếp tục phiên $(Get-AiId $script:ai.Session) - bấm Phiên mới để bắt đầu lại" } else { '' })
-        $lblAiState.ForeColor = $Theme.Muted
-    }
+    foreach ($c in @($btnAiTool, $btnAiMode, $btnAiModel, $btnAiDir)) { $c.Enabled = -not $busy }
+    if (-not $busy -and $lblAiState.Text) { $lblAiState.Text = ''; Update-AiLayout }
 }
 $cbAiTool.Add_SelectedIndexChanged({
     $PanelConfig.aiTool = Get-AiToolKey; Save-PanelConfig $PanelConfig
     Update-AiModels
-    if ($script:aiShown) { Show-AiWelcome }
+    if ($script:aiShown) { Show-AiWelcome } else { Update-AiChips }
 })
 $cbAiMode.Add_SelectedIndexChanged({ $PanelConfig.aiMode = $cbAiMode.SelectedIndex; Save-PanelConfig $PanelConfig })
-$txtAiIn.Add_KeyDown({ param($sender, $e) if ($e.Control -and $e.KeyCode -eq 'Enter') { $e.SuppressKeyPress = $true; Send-AiPrompt } })
-# Lần đầu mở tab: nạp danh sách thư mục + lời chào
+# Lần đầu mở tab: nạp danh sách thư mục + màn hình chào
 $script:aiShown = $false
 function Enter-AiTab {
-    if (-not $script:aiShown) { $script:aiShown = $true; Update-AiDirs ''; Show-AiWelcome }
+    if (-not $script:aiShown) { $script:aiShown = $true; Update-AiDirs ''; Show-AiWelcome } else { Update-AiContext }
+    Update-AiBottom; Update-AiLayout
     [void]$txtAiIn.Focus()
 }
 
@@ -3379,10 +3777,11 @@ function Send-AiPrompt {
     $sess = if ($script:ai.Session -match '^[\w.:-]+$') { $script:ai.Session } else { $null }
     $cmd = Get-AiCommand $exe (Get-AiArgs $tool $mode $model $sess)
 
-    Add-AiHeader 'Bạn' 'Accent'
-    foreach ($ln in ($prompt -split "`r?`n")) { Add-AiRun "$ln`n" 'Text' $AiFont 18 }
-    Add-AiHeader "$($t.Name)  ·  $(Split-Path $dir -Leaf)" $t.Color
+    if (-not $sess) { $first = ($prompt -split "`r?`n")[0]; $script:ai.Title = $(if ($first.Length -gt 70) { $first.Substring(0, 70) + '…' } else { $first }) }
+    Add-AiUser $prompt
     $txtAiIn.Clear()
+    $lblAiState.Text = "◐ $($t.Name) đang làm việc…"
+    Update-AiChips; Update-AiLayout -Scroll
     $PanelConfig.aiModel = $model
     $PanelConfig.aiDirs = @(@($dir) + @($PanelConfig.aiDirs | Where-Object { $_ -ne $dir }) | Select-Object -First 8)
     Save-PanelConfig $PanelConfig
@@ -3439,15 +3838,7 @@ function Complete-AiRun {
     try { $r.PS.EndInvoke($r.Handle) | Out-Null } catch { }
     $r.PS.Dispose(); $r.RS.Dispose()
     Update-AiUi
-    $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.ScrollToCaret()
-    # Báo số file đang thay đổi để review (nếu là git repo)
-    Start-CoreAsync '@(Get-RepoChanges $p.Dir | ForEach-Object Path | Sort-Object -Unique).Count' @{ Dir = $r.Dir } {
-        param($res, $ctx)
-        if ($res.Ok -and [int]$res.Value -gt 0 -and -not $script:aiRun) {
-            Add-AiNote "Thư mục có $($res.Value) file đang thay đổi - bấm ""Xem thay đổi / Commit…"" để review."
-            $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.ScrollToCaret()
-        }
-    }
+    Update-AiContext -Note        # dải repo cập nhật +/- ; có thay đổi thì nhắc review
     if (-not $form.ContainsFocus) { $tray.ShowBalloonTip(4000, $r.Name, 'Đã trả lời xong.', 'Info') }
 }
 $aiTimer = New-Object System.Windows.Forms.Timer
@@ -3457,10 +3848,9 @@ $aiTimer.Add_Tick({
     if (-not $r) { $aiTimer.Stop(); return }
     $l = $null; $n = 0
     while ($n -lt 300 -and $r.Sync.Q.TryDequeue([ref]$l)) { Show-AiEvent $l; $n++ }
-    if ($n) { $rtbAi.SelectionStart = $rtbAi.TextLength; $rtbAi.ScrollToCaret() }
     $ms = ((Get-Date) - $r.Started).TotalMilliseconds
-    $lblAiState.Text = "$($SpinFrames[[int]($ms / 250) % 4]) $($r.Name) đang làm việc… $([int]($ms / 1000))s"
-    $lblAiState.ForeColor = $Theme.Info
+    $lblAiState.Text = "$($SpinFrames[[int]($ms / 250) % 4])  $($r.Name) đang làm việc…  $([int]($ms / 1000))s"
+    if (-not $lblAiState.Visible) { Update-AiLayout -Scroll:$script:aiStick }
     if ($r.Sync.Done -and $r.Sync.Q.IsEmpty) { Complete-AiRun }
 })
 
@@ -3526,10 +3916,9 @@ foreach ($m in @($menu, $profMenu)) { Add-MenuIcons $m.Items }
 [void](Set-ButtonRow $pageApps 304)                 # Start / Stop / ... / Quét project
 [void](Set-ButtonRow $pageGit $btnY)                # Làm mới / Fetch / Pull / ...
 [void](Set-ButtonRow $gScan 212)                    # Lưu và quét ngay / Xuất / Nhập
-$xs = Set-ButtonRow $pageSettings 456 6 8           # Lưu và mở lại / Chẩn đoán
+$xs = Set-ButtonRow $pageSettings 490 6 8           # Lưu và mở lại / Chẩn đoán
 $lblDataDir.Left = $xs + 4; $lblDataDir.Width = [math]::Max(80, 516 - $xs - 10)      # bề rộng thiết kế; neo phải sẽ giãn theo cửa sổ
 [void](Set-ButtonRow $pageHelp 448)
-[void](Set-ButtonRow $pageAi 456 12 6)              # Gửi / Dừng / Phiên mới / ...
 $xw = Set-ButtonRow $gUbuntu 26 12 6                # nút WSL có icon rộng ra -> link hướng dẫn đặt ngay sau nút cuối
 foreach ($l in @($lnkWsl1, $lnkWsl2)) { $l.Left = $xw + 8 }
 $x = 12
@@ -3550,7 +3939,10 @@ function Set-ControlTheme($c, $old, $new) {
     switch ($c) {
         { $_ -is [System.Windows.Forms.Button] } {
             $c.UseVisualStyleBackColor = $false; $c.FlatStyle = 'Flat'; $c.Cursor = 'Hand'; $c.FlatAppearance.BorderSize = 1
-            if (Test-PrimaryButton $c) {
+            if ($c.Tag -eq 'chip') {
+                $c.BackColor = $c.Parent.BackColor; $c.ForeColor = $new.Muted; $c.FlatAppearance.BorderSize = 0
+                $c.FlatAppearance.MouseOverBackColor = $new.Hi; $c.FlatAppearance.MouseDownBackColor = $new.Sel
+            } elseif (Test-PrimaryButton $c) {
                 $c.BackColor = $new.Accent; $c.ForeColor = $new.AccentText
                 $c.FlatAppearance.BorderColor = $new.Accent; $c.FlatAppearance.MouseOverBackColor = $new.AccentHi; $c.FlatAppearance.MouseDownBackColor = $new.Accent
             } else {
@@ -3578,6 +3970,7 @@ function Set-ControlTheme($c, $old, $new) {
         { $_ -is [System.Windows.Forms.TreeView] } { $c.BackColor = $new.Surface; $c.ForeColor = $new.Text; break }
         default { $c.BackColor = $new.Back; $c.ForeColor = $new.Text; if ($c -is [System.Windows.Forms.Panel]) { $c.Invalidate() } }
     }
+    if ($c.Name -like 'bg:*') { $c.BackColor = $new[$c.Name.Substring(3)] }      # nền theo tên màu theme (khung chat AI...)
     foreach ($ch in $c.Controls) { Set-ControlTheme $ch $old $new }
 }
 function Set-MenuTheme($m, $old, $new, [bool]$dark) {
@@ -3608,22 +4001,24 @@ function Set-NativeTheme($root) {
 
 # Thanh điều hướng dọc bên trái (TabControl vẫn lo chuyển trang, Ctrl+Tab...; dải tab gốc bị ẩn bằng Region):
 # mục đang chọn nền màu nhấn nhạt + vạch nhấn bên trái, rê chuột thì sáng nhẹ; dưới cùng là nút đổi giao diện sáng / tối
-$SideW = 210
-$SideFont = New-Object System.Drawing.Font('Segoe UI', 10)
-$SideFontSel = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
+$SideW = 210; $SideWMin = 60
+$SideFont = $TabFont
+$SideFontSel = $TabFontSel
 $sideNav = New-Object System.Windows.Forms.Panel
 $sideNav.Cursor = 'Hand'
 Set-DoubleBuffered $sideNav
 $form.Controls.Add($sideNav)
 $script:sideRects = @(); $script:sideHover = -1; $script:sideTheme = $null
-function Draw-SideItem($g, $r, [string]$code, [string]$text, [bool]$sel, [bool]$hover) {
+function Draw-SideItem($g, $r, [string]$code, [string]$text, [bool]$sel, [bool]$hover, [bool]$mini = $false) {
     if ($sel -or $hover) {
         $p = New-RoundRect $r.X $r.Y $r.Width $r.Height 10
         $b = New-Object System.Drawing.SolidBrush($(if ($sel) { $Theme.Sel } else { $Theme.Hi })); $g.FillPath($b, $p); $b.Dispose(); $p.Dispose()
     }
     if ($sel) { $p = New-RoundRect $r.X ($r.Y + 10) 4 ($r.Height - 20) 2; $b = New-Object System.Drawing.SolidBrush($Theme.Accent); $g.FillPath($b, $p); $b.Dispose(); $p.Dispose() }
     $fc = if ($sel) { $Theme.Accent } else { $Theme.Text }
-    if ($code -and $IconFontName) { $g.DrawImage((Get-IconBitmap $code $(if ($sel) { $Theme.Accent } else { $Theme.Muted })), ($r.X + 16), ($r.Y + [int](($r.Height - 16) / 2)), 16, 16) }
+    $ix = if ($mini) { $r.X + [int](($r.Width - 16) / 2) } else { $r.X + 16 }
+    if ($code -and $IconFontName) { $g.DrawImage((Get-IconBitmap $code $(if ($sel) { $Theme.Accent } else { $Theme.Muted })), $ix, ($r.Y + [int](($r.Height - 16) / 2)), 16, 16) }
+    if ($mini) { return }
     [System.Windows.Forms.TextRenderer]::DrawText($g, $text, $(if ($sel) { $SideFontSel } else { $SideFont }), (New-Object System.Drawing.Rectangle(($r.X + 44), $r.Y, ($r.Width - 48), $r.Height)), $fc,
         [System.Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, EndEllipsis, NoPadding')
 }
@@ -3632,38 +4027,69 @@ $sideNav.Add_Paint({
     $g = $e.Graphics; $g.SmoothingMode = 'AntiAlias'
     $g.Clear($Theme.Card)
     $pen = New-Object System.Drawing.Pen($Theme.Border); $g.DrawLine($pen, ($s.Width - 1), 0, ($s.Width - 1), $s.Height)
-    $rects = @(); $y = 14
+    $rects = @(); $y = 14; $mini = [bool]$PanelConfig.navCollapsed
     for ($i = 0; $i -lt $tabs.TabCount; $i++) {
         $pg = $tabs.TabPages[$i]
         $r = New-Object System.Drawing.Rectangle(10, $y, ($s.Width - 21), 40)
         $rects += $r
-        Draw-SideItem $g $r $TabIcons[$pg.Text] $pg.Text ($i -eq $tabs.SelectedIndex) ($i -eq $script:sideHover)
+        Draw-SideItem $g $r $TabIcons[$pg.Text] $pg.Text ($i -eq $tabs.SelectedIndex) ($i -eq $script:sideHover) $mini
         $y += 44
     }
     $script:sideRects = $rects
     $dark = $script:ThemeName -eq 'dark'
-    $r = New-Object System.Drawing.Rectangle(10, ($s.Height - 54), ($s.Width - 21), 40)
+    $r = New-Object System.Drawing.Rectangle(10, ($s.Height - 98), ($s.Width - 21), 40)
     $g.DrawLine($pen, 18, ($r.Y - 8), ($s.Width - 19), ($r.Y - 8)); $pen.Dispose()
-    Draw-SideItem $g $r $(if ($dark) { 'E706' } else { 'E708' }) $(if ($dark) { 'Giao diện sáng' } else { 'Giao diện tối' }) $false ($script:sideHover -eq 99)
+    Draw-SideItem $g $r $(if ($mini) { 'E76C' } else { 'E76B' }) 'Thu gọn menu' $false ($script:sideHover -eq 98) $mini
+    $script:sideCollapse = $r
+    $r = New-Object System.Drawing.Rectangle(10, ($s.Height - 54), ($s.Width - 21), 40)
+    Draw-SideItem $g $r $(if ($dark) { 'E706' } else { 'E708' }) $(if ($dark) { 'Giao diện sáng' } else { 'Giao diện tối' }) $false ($script:sideHover -eq 99) $mini
     $script:sideTheme = $r
 })
 function Get-SideAt($pt) {
     for ($i = 0; $i -lt $script:sideRects.Count; $i++) { if ($script:sideRects[$i].Contains($pt)) { return $i } }
     if ($script:sideTheme -and $script:sideTheme.Contains($pt)) { return 99 }
+    if ($script:sideCollapse -and $script:sideCollapse.Contains($pt)) { return 98 }
     -1
+}
+# Vị trí menu tab: 'top' = trên dải tiêu đề (mặc định, gọn), 'side' = thanh bên trái (thu gọn được còn icon).
+# Đặt lại vị trí trang tab + các control dưới cùng; gọi lúc mở panel và khi đổi trong tab Cài đặt / bấm thu gọn.
+function Set-NavLayout {
+    $side = $PanelConfig.navLayout -eq 'side'
+    $sw = if (-not $side) { 0 } elseif ($PanelConfig.navCollapsed) { $SideWMin } else { $SideW }
+    $cw = $form.ClientSize.Width
+    $sideNav.Visible = $side
+    $sideNav.SetBounds(0, $HeaderH, $sw, ($form.ClientSize.Height - $HeaderH))
+    $dr = $tabs.DisplayRectangle
+    $tl = $sw + 10 - $dr.X; $tt = $HeaderH + 8 - $dr.Y
+    $tabs.SetBounds($tl, $tt, ($cw - 10 + ($tabs.Width - $dr.Right) - $tl), ($tabs.Bottom - $tt))
+    $chkLogon.Left = 16 + $sw; $chkAuto.Left = 280 + $sw
+    $right = $statusLbl.Right; $statusLbl.Left = 16 + $sw; $statusLbl.Width = [math]::Max(100, $right - $statusLbl.Left)
+    Update-TabsRegion
+    $header.Invalidate(); $sideNav.Invalidate()
 }
 $sideNav.Add_MouseDown({
     param($s, $e)
     $i = Get-SideAt $e.Location
     if ($i -eq 99) { $cbTheme.SelectedIndex = 1 - $cbTheme.SelectedIndex }        # như chọn ở tab Cài đặt (lưu cấu hình)
+    elseif ($i -eq 98) { $PanelConfig.navCollapsed = -not $PanelConfig.navCollapsed; Save-PanelConfig $PanelConfig; $script:sideHover = -1; Set-NavLayout }
     elseif ($i -ge 0) { $tabs.SelectedIndex = $i }
 })
-$sideNav.Add_MouseMove({ param($s, $e) $i = Get-SideAt $e.Location; if ($i -ne $script:sideHover) { $script:sideHover = $i; $s.Invalidate() } })
+$sideNav.Add_MouseMove({
+    param($s, $e)
+    $i = Get-SideAt $e.Location
+    if ($i -ne $script:sideHover) {
+        $script:sideHover = $i; $s.Invalidate()
+        $tip = if (-not $PanelConfig.navCollapsed -or $i -lt 0) { '' } elseif ($i -eq 98) { 'Mở rộng menu' } elseif ($i -eq 99) { 'Đổi giao diện sáng / tối' } else { $tabs.TabPages[$i].Text }
+        $tipDoc.SetToolTip($s, $tip)
+    }
+})
 $sideNav.Add_MouseLeave({ param($s, $e) $script:sideHover = -1; $s.Invalidate() })
 # Chỉ vẽ vùng trang: dải tab và khung viền hệ thống (theme tối vẽ màu sáng) bị cắt bỏ
-$tabs.Add_Resize({ $tabs.Region = New-Object System.Drawing.Region($tabs.DisplayRectangle) })
+# (TabControl chỉ tính lại DisplayRectangle SAU khi chạy các handler Resize -> đặt Region ở lượt sau)
+function Update-TabsRegion { $tabs.Region = New-Object System.Drawing.Region($tabs.DisplayRectangle) }
+$tabs.Add_Resize({ if ($form.IsHandleCreated) { [void]$form.BeginInvoke([Action]{ Update-TabsRegion }) } else { Update-TabsRegion } })
 # control ở tab chưa mở chưa có handle lúc áp theme -> mở tab nào thì áp scrollbar / header tối cho tab đó
-$tabs.Add_SelectedIndexChanged({ $sideNav.Invalidate(); if ($script:ThemeName -eq 'dark') { Set-NativeTheme $tabs.SelectedTab } })
+$tabs.Add_SelectedIndexChanged({ $sideNav.Invalidate(); $header.Invalidate(); if ($script:ThemeName -eq 'dark') { Set-NativeTheme $tabs.SelectedTab } })
 
 # Bảng (ListView) tự vẽ ở cả 2 theme: header phẳng, dòng kẻ sọc, dòng chọn màu nhấn nhạt,
 # ô trạng thái có ký hiệu đầu (● ○ ✗ ⚠ ✓ ◐) vẽ thành "pill" màu
@@ -3728,7 +4154,7 @@ function Set-Theme([string]$name) {
     $miAppProfiles.DropDown.Renderer = $appsMenu.Renderer; $miAppProfiles.DropDown.BackColor = $Theme.Surface
     Update-IconColors
     foreach ($lv in $AllListViews + @($lvLog)) { $lv.Invalidate() }
-    if ($script:aiRuns.Count) { Show-AiRuns }
+    Update-AiTheme
     if ($cbTheme.SelectedIndex -ne [int]$dark) { $cbTheme.SelectedIndex = [int]$dark }
     $form.ResumeLayout()
     Set-NativeTheme $form
@@ -3957,8 +4383,6 @@ $lblGitTab.Anchor = 'Top, Left, Right'; $chkLogAll.Anchor = 'Top, Right'; $cbLog
 $lvLog.Anchor = 'Top, Bottom, Left, Right'
 Set-FillColumn $lvLog 1
 $cbAiDir.Anchor = 'Top, Left, Right'; $lblAiModel.Anchor = 'Top, Right'; $cbAiModel.Anchor = 'Top, Right'
-$aiLogBox.Anchor = 'Top, Bottom, Left, Right'; $aiInBox.Anchor = 'Bottom, Left, Right'; $lblAiState.Anchor = 'Bottom, Left, Right'
-foreach ($c in $pageAi.Controls) { if ($c -is [System.Windows.Forms.Button]) { $c.Anchor = 'Bottom, Left' } }
 $btnProfiles.Anchor = 'Top, Right' 
 Set-FillColumn $lvCpu 0
 Set-FillColumn $lvRam 0
@@ -3981,12 +4405,8 @@ $form.Location = New-Object System.Drawing.Point(($wa.Left + ($wa.Width - $form.
 # cửa sổ (trang không bao giờ nhỏ hơn bố cục thiết kế) - đặt vị trí bằng code thì khoảng neo được tính lại theo chỗ mới.
 $cw = $form.ClientSize.Width
 $header.SetBounds(0, 0, $cw, $HeaderH); $header.Anchor = 'Top, Left, Right'
-$dr = $tabs.DisplayRectangle
-$tl = $SideW + 10 - $dr.X; $tt = $HeaderH + 8 - $dr.Y
-$tabs.SetBounds($tl, $tt, ($cw - 10 + ($tabs.Width - $dr.Right) - $tl), ($tabs.Bottom - $tt))
-$sideNav.SetBounds(0, $HeaderH, $SideW, ($form.ClientSize.Height - $HeaderH)); $sideNav.Anchor = 'Top, Bottom, Left'
-foreach ($c in @($chkLogon, $chkAuto, $statusLbl)) { $c.Left += $SideW }
-$statusLbl.Width -= $SideW
+$sideNav.Anchor = 'Top, Bottom, Left'
+Set-NavLayout
 })
 
 [System.Windows.Forms.Application]::Run($form)
