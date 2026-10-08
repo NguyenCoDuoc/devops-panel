@@ -165,7 +165,7 @@ $IconRules = @(
     @('Chọn', 'E762', 'Text'), @('Khôi phục', 'E81C', 'Text'), @('Hiện cột', 'E9D9', 'Text'), @('Describe', 'E946', 'Text'),
     @('Chẩn đoán', 'E9D9', 'Text'), @('Xuất danh mục', 'E898', 'Text'), @('Nhập danh mục', 'E896', 'Text'), @('Sửa apps.json', 'E70F', 'Text'),
     @('Đổi tên', 'E70F', 'Text'), @('Xoá', 'E74D', 'Text'), @('Lưu và mở lại', 'E73E', 'Text'), @('Trợ giúp', 'E9CE', 'Text'),
-    @('Thoát', 'E711', 'Text'), @('Cài đặt', 'E713', 'Text'), @('Hiện mật khẩu', 'E8D7', 'Text'), @('Kiểm tra cập nhật', 'E895', 'Text'), @('Cài bản mới', 'E896', 'Ok'), @('Xem trên GitHub', 'E8A7', 'Text'), @('Cập nhật', 'E896', 'Ok')
+    @('Thoát', 'E711', 'Text'), @('Cài đặt', 'E713', 'Text'), @('Hiện mật khẩu', 'E8D7', 'Text'), @('Thêm', 'E710', 'Ok'), @('Lưu mục tiêu', 'E73E', 'Ok'), @('Sửa…', 'E70F', 'Text'), @('Để sang ngày mai', 'E72A', 'Text'), @('Kiểm tra cập nhật', 'E895', 'Text'), @('Cài bản mới', 'E896', 'Ok'), @('Xem trên GitHub', 'E8A7', 'Text'), @('Cập nhật', 'E896', 'Ok')
 )
 $TabIcons = @{ 'Dịch vụ' = 'E9F5'; 'Ứng dụng' = 'E74C'; 'Git' = 'F003'; 'Sức khỏe' = 'E95E'; 'K3s' = 'E7B8'; 'Cài đặt' = 'E713'; 'Trợ giúp' = 'E9CE' }
 
@@ -362,7 +362,7 @@ if (-not $Distro) { foreach ($c in $gUbuntu.Controls) { if ($c -isnot [System.Wi
 
 # PostgreSQL trong WSL (bật bằng port ở tab Cài đặt)
 $gPg = New-Group $(if ($Distro -and $PgUbuntuPort -gt 0) { "PostgreSQL trong $Distro (localhost:$PgUbuntuPort, user admin)" } else { 'PostgreSQL trong WSL (chưa cấu hình - xem tab Cài đặt)' }) 352 70
-if (-not ($Distro -and $PgUbuntuPort -gt 0)) { $gPg.Enabled = $false }
+$script:pgReady = [bool]($Distro -and $PgUbuntuPort -gt 0)
 New-Button 'Hiện mật khẩu' 12 26 160 $gPg {
     $pw = Get-PgPassword
     if ($pw) {
@@ -393,6 +393,226 @@ if ($HasWebPanel) {
 } else {
     New-Button 'Cài đặt' 378 26 130 $gOther { $tabs.SelectedTab = $pageSettings } | Out-Null
 }
+
+# ---------- Thu gọn nhóm PostgreSQL trong WSL (ít dùng) ----------
+foreach ($c in $gPg.Controls) { $c.Enabled = $script:pgReady }
+$script:pgCollapsed = [bool]$PanelConfig.pgCollapsed
+$lnkPgExpand = New-Object System.Windows.Forms.LinkLabel
+$lnkPgExpand.Text = "▸ $($gPg.Text)"; $lnkPgExpand.AutoSize = $true; $lnkPgExpand.LinkBehavior = 'HoverUnderline'
+$lnkPgExpand.Add_LinkClicked({ Set-PgCollapsed $false })
+$pageMain.Controls.Add($lnkPgExpand)
+$lnkPgCollapse = New-Object System.Windows.Forms.LinkLabel
+$lnkPgCollapse.Text = 'thu gọn ▴'; $lnkPgCollapse.AutoSize = $true; $lnkPgCollapse.LinkBehavior = 'HoverUnderline'
+$lnkPgCollapse.Location = New-Object System.Drawing.Point(($gPg.Width - 76), 0); $lnkPgCollapse.Anchor = 'Top, Right'
+$lnkPgCollapse.Add_LinkClicked({ Set-PgCollapsed $true })
+$gPg.Controls.Add($lnkPgCollapse); $lnkPgCollapse.BringToFront()
+function Set-PgCollapsed([bool]$c) {
+    $script:pgCollapsed = $c
+    $gPg.Visible = -not $c; $lnkPgExpand.Visible = $c
+    $PanelConfig.pgCollapsed = $c; Save-PanelConfig $PanelConfig
+    Update-MainLayout
+}
+
+# ---------- Mục tiêu hôm nay (góc phải tab Dịch vụ) ----------
+# Lưu ở %APPDATA%\DevOpsPanel\goals.json: danh sách { date, text, done }, giữ 90 ngày
+$GoalsFile = Join-Path $DataDir 'goals.json'
+$script:goals = New-Object System.Collections.ArrayList
+$script:goalsDay = ''
+$script:goalsRendering = $false
+function Get-Today { (Get-Date).ToString('yyyy-MM-dd') }
+function Load-Goals {
+    $script:goals.Clear()
+    if (-not (Test-Path $GoalsFile)) { return }
+    # PS 5.1: ConvertFrom-Json trả cả mảng như 1 object -> gán vào biến rồi foreach mới duyệt từng phần tử
+    try { $data = Get-Content $GoalsFile -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($g in $data) { if ($g.text) { [void]$script:goals.Add([pscustomobject]@{ date = [string]$g.date; text = [string]$g.text; done = [bool]$g.done }) } } } catch { }
+}
+function Save-Goals {
+    $cut = (Get-Date).AddDays(-90).ToString('yyyy-MM-dd')
+    ConvertTo-Json -InputObject @($script:goals | Where-Object { $_.date -ge $cut }) -Depth 3 | Set-Content $GoalsFile -Encoding UTF8
+}
+function Get-TodayGoals { @($script:goals | Where-Object { $_.date -eq (Get-Today) }) }
+# Mục tiêu chưa xong của ngày gần nhất trước hôm nay (để gợi ý mang sang)
+function Get-CarryGoals {
+    $prev = @($script:goals | Where-Object { $_.date -lt (Get-Today) } | Sort-Object date -Descending | Select-Object -First 1).date
+    if (-not $prev) { return @() }
+    @($script:goals | Where-Object { $_.date -eq $prev -and -not $_.done })
+}
+# Tên gọi thân thiện: tên trong git (Nguyen Co Duoc -> Duoc), không có thì tên đăng nhập Windows
+$script:userName = [Environment]::UserName
+if ($GitExe) { $gn = (Invoke-Git $env:USERPROFILE @('config', '--global', 'user.name') 3000).Out.Trim(); if ($gn) { $script:userName = ($gn -split '\s+')[-1] } }
+function Get-Greeting {
+    $h = (Get-Date).Hour
+    if ($h -lt 11) { "☀ Chào buổi sáng, $($script:userName)!" } elseif ($h -lt 13) { "☀ Chào buổi trưa, $($script:userName)!" }
+    elseif ($h -lt 18) { "☁ Chào buổi chiều, $($script:userName)!" } else { "☾ Chào buổi tối, $($script:userName)!" }
+}
+
+$gGoals = New-Object System.Windows.Forms.GroupBox
+$gGoals.Text = 'Mục tiêu hôm nay'
+$gGoals.Location = New-Object System.Drawing.Point(530, 10); $gGoals.Size = New-Object System.Drawing.Size(300, 480)
+$pageMain.Controls.Add($gGoals)
+$lblGreet = New-Object System.Windows.Forms.Label
+$lblGreet.Location = New-Object System.Drawing.Point(12, 24); $lblGreet.Size = New-Object System.Drawing.Size(276, 22)
+$lblGreet.Font = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
+$lblGreet.AutoEllipsis = $true
+$lblAsk = New-Object System.Windows.Forms.Label
+$lblAsk.Location = New-Object System.Drawing.Point(12, 48); $lblAsk.Size = New-Object System.Drawing.Size(276, 40)
+$txtGoal = New-Object System.Windows.Forms.TextBox
+$txtGoal.Location = New-Object System.Drawing.Point(12, 92); $txtGoal.Size = New-Object System.Drawing.Size(206, 26)
+$btnGoalAdd = New-Object System.Windows.Forms.Button
+$btnGoalAdd.Text = 'Thêm'; $btnGoalAdd.Location = New-Object System.Drawing.Point(224, 89); $btnGoalAdd.Size = New-Object System.Drawing.Size(64, 30)
+$clbGoals = New-Object System.Windows.Forms.CheckedListBox
+$clbGoals.CheckOnClick = $true; $clbGoals.IntegralHeight = $false; $clbGoals.HorizontalScrollbar = $false
+$clbGoals.Location = New-Object System.Drawing.Point(12, 126); $clbGoals.Size = New-Object System.Drawing.Size(276, 280)
+$pbGoals = New-Object System.Windows.Forms.ProgressBar
+$pbGoals.Location = New-Object System.Drawing.Point(12, 414); $pbGoals.Size = New-Object System.Drawing.Size(276, 8)
+$lblGoalProg = New-Object System.Windows.Forms.Label
+$lblGoalProg.Location = New-Object System.Drawing.Point(12, 426); $lblGoalProg.Size = New-Object System.Drawing.Size(150, 22)
+$lnkGoalAsk = New-Object System.Windows.Forms.LinkLabel
+$lnkGoalAsk.Text = 'Đặt mục tiêu…'; $lnkGoalAsk.AutoSize = $true; $lnkGoalAsk.Location = New-Object System.Drawing.Point(190, 428)
+$lnkGoalAsk.Add_LinkClicked({ Show-GoalsDialog })
+$lnkGoalClear = New-Object System.Windows.Forms.LinkLabel
+$lnkGoalClear.Text = 'Xoá mục đã xong'; $lnkGoalClear.AutoSize = $true; $lnkGoalClear.Location = New-Object System.Drawing.Point(12, 452)
+$lnkGoalClear.Add_LinkClicked({ foreach ($g in @(Get-TodayGoals | Where-Object done)) { $script:goals.Remove($g) }; Save-Goals; Render-Goals })
+$gGoals.Controls.AddRange(@($lblGreet, $lblAsk, $txtGoal, $btnGoalAdd, $clbGoals, $pbGoals, $lblGoalProg, $lnkGoalAsk, $lnkGoalClear))
+# neo theo kích thước ô (ô đổi cỡ theo cửa sổ)
+foreach ($c in @($lblGreet, $lblAsk, $txtGoal)) { $c.Anchor = 'Top, Left, Right' }
+$btnGoalAdd.Anchor = 'Top, Right'; $clbGoals.Anchor = 'Top, Bottom, Left, Right'
+$pbGoals.Anchor = 'Bottom, Left, Right'; $lblGoalProg.Anchor = 'Bottom, Left'; $lnkGoalAsk.Anchor = 'Bottom, Right'; $lnkGoalClear.Anchor = 'Bottom, Left'
+
+function Render-Goals {
+    $script:goalsDay = Get-Today
+    $items = @(Get-TodayGoals)
+    $done = @($items | Where-Object done).Count
+    $script:goalsRendering = $true
+    $clbGoals.BeginUpdate(); $clbGoals.Items.Clear()
+    foreach ($g in $items) { [void]$clbGoals.Items.Add($g.text, [bool]$g.done) }
+    $clbGoals.EndUpdate()
+    $script:goalsRendering = $false
+    $lblGreet.Text = Get-Greeting
+    $lblAsk.Text = if (-not $items.Count) { 'Hôm nay bạn muốn hoàn thành điều gì? Ghi vài mục tiêu nhỏ, xong thì tick nhé.' }
+                   elseif ($done -eq $items.Count) { "✨ Tuyệt vời! Đã xong cả $($items.Count) mục tiêu hôm nay." }
+                   else { "Còn $($items.Count - $done) mục tiêu - từng bước một, cố lên nhé!" }
+    $lblAsk.ForeColor = if ($items.Count -and $done -eq $items.Count) { $Theme.Ok } else { $Theme.Muted }
+    $pbGoals.Maximum = [math]::Max(1, $items.Count); $pbGoals.Value = $done
+    $lblGoalProg.Text = if ($items.Count) { "Đã xong $done/$($items.Count)" } else { '' }
+    $lnkGoalClear.Visible = [bool]$done
+}
+function Add-Goal([string]$t) {
+    $t = $t.Trim()
+    if (-not $t) { return }
+    if (@(Get-TodayGoals | Where-Object { $_.text -eq $t }).Count) { Set-Status 'Mục tiêu này đã có rồi.'; return }
+    [void]$script:goals.Add([pscustomobject]@{ date = Get-Today; text = $t; done = $false })
+    Save-Goals; Render-Goals
+}
+$btnGoalAdd.Add_Click({ Add-Goal $txtGoal.Text; $txtGoal.Clear(); [void]$txtGoal.Focus() })
+$txtGoal.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Enter') { $e.SuppressKeyPress = $true; Add-Goal $txtGoal.Text; $txtGoal.Clear() } })
+$clbGoals.Add_ItemCheck({
+    param($sender, $e)
+    if ($script:goalsRendering) { return }
+    $g = @(Get-TodayGoals)[$e.Index]
+    if (-not $g) { return }
+    $g.done = ($e.NewValue -eq 'Checked')
+    Save-Goals
+    # ItemCheck chạy trước khi ô đổi trạng thái -> vẽ lại sau khi xong
+    $form.BeginInvoke([Action]{ Render-Goals }) | Out-Null
+    if ($g.done -and @(Get-TodayGoals | Where-Object { -not $_.done }).Count -eq 0) { Set-Status '✨ Đã hoàn thành tất cả mục tiêu hôm nay!' }
+})
+$clbGoals.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -eq 'Delete' -and $clbGoals.SelectedIndex -ge 0) { $g = @(Get-TodayGoals)[$clbGoals.SelectedIndex]; $script:goals.Remove($g); Save-Goals; Render-Goals } })
+$goalMenu = New-Object System.Windows.Forms.ContextMenuStrip
+[void]$goalMenu.Items.Add('Sửa…', $null, {
+    $i = $clbGoals.SelectedIndex; if ($i -lt 0) { return }
+    $g = @(Get-TodayGoals)[$i]
+    $t = [Microsoft.VisualBasic.Interaction]::InputBox('Sửa mục tiêu:', 'Mục tiêu hôm nay', $g.text)
+    if ($t.Trim()) { $g.text = $t.Trim(); Save-Goals; Render-Goals }
+})
+[void]$goalMenu.Items.Add('Để sang ngày mai', $null, {
+    $i = $clbGoals.SelectedIndex; if ($i -lt 0) { return }
+    $g = @(Get-TodayGoals)[$i]; $g.date = (Get-Date).AddDays(1).ToString('yyyy-MM-dd'); Save-Goals; Render-Goals
+    Set-Status "Đã để \"$($g.text)\" sang ngày mai."
+})
+[void]$goalMenu.Items.Add('Xoá', $null, { $i = $clbGoals.SelectedIndex; if ($i -ge 0) { $script:goals.Remove(@(Get-TodayGoals)[$i]); Save-Goals; Render-Goals } })
+$clbGoals.ContextMenuStrip = $goalMenu
+$clbGoals.Add_MouseDown({ param($sender, $e) if ($e.Button -eq 'Right') { $i = $clbGoals.IndexFromPoint($e.Location); if ($i -ge 0) { $clbGoals.SelectedIndex = $i } } })
+
+# Hộp thoại "trợ lý" hỏi mục tiêu đầu ngày (mỗi dòng một mục, gợi ý mang sang việc hôm qua chưa xong)
+function Show-GoalsDialog([switch]$Morning) {
+    $carry = @(Get-CarryGoals | Where-Object { $t = $_.text; -not @(Get-TodayGoals | Where-Object { $_.text -eq $t }).Count })
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Trợ lý DevOps'; $d.Icon = $AppIcon; $d.Font = $font
+    $d.Size = New-Object System.Drawing.Size(500, 430); $d.StartPosition = 'CenterParent'
+    $d.FormBorderStyle = 'FixedDialog'; $d.MinimizeBox = $false; $d.MaximizeBox = $false
+    $l1 = New-Label (Get-Greeting) 18 16 450 $d
+    $l1.Font = New-Object System.Drawing.Font('Segoe UI', 13, [System.Drawing.FontStyle]::Bold); $l1.Height = 30
+    $l2 = New-Label '' 18 50 450 $d
+    $l2.Height = 64
+    $l2.Text = "Hôm nay bạn sẽ làm gì? Ghi vài mục tiêu, mỗi dòng một mục - mình sẽ để ở góc phải tab Dịch vụ để bạn tick khi xong." +
+               $(if ($carry.Count) { "`r`n(Đã điền sẵn $($carry.Count) việc hôm trước chưa xong.)" } else { '' })
+    $l2.ForeColor = $Theme.Muted
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Multiline = $true; $tb.AcceptsReturn = $true; $tb.ScrollBars = 'Vertical'
+    $tb.Location = New-Object System.Drawing.Point(18, 118); $tb.Size = New-Object System.Drawing.Size(450, 192)
+    $tb.Font = New-Object System.Drawing.Font('Segoe UI', 11)
+    $tb.Text = ((@(Get-TodayGoals | ForEach-Object text) + @($carry | ForEach-Object text)) -join "`r`n")
+    $d.Controls.Add($tb)
+    $chk = New-Object System.Windows.Forms.CheckBox
+    $chk.Text = 'Hỏi mỗi ngày khi mở panel'; $chk.Checked = [bool]$PanelConfig.goalsAsk; $chk.AutoSize = $true
+    $chk.Location = New-Object System.Drawing.Point(18, 322)
+    $d.Controls.Add($chk)
+    $bOk = New-Object System.Windows.Forms.Button; $bOk.Text = 'Lưu mục tiêu'; $bOk.DialogResult = 'OK'
+    $bOk.Location = New-Object System.Drawing.Point(238, 346); $bOk.Size = New-Object System.Drawing.Size(130, 34)
+    $bLater = New-Object System.Windows.Forms.Button; $bLater.Text = 'Để sau'; $bLater.DialogResult = 'Cancel'
+    $bLater.Location = New-Object System.Drawing.Point(374, 346); $bLater.Size = New-Object System.Drawing.Size(94, 34)
+    $d.Controls.AddRange(@($bOk, $bLater)); $d.CancelButton = $bLater
+    Set-ControlTheme $d $Theme $Theme
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender; $t = $sender.Controls | Where-Object { $_ -is [System.Windows.Forms.TextBox] }; [void]$t.Focus(); $t.SelectionStart = $t.TextLength })
+    $res = $d.ShowDialog($form)
+    $PanelConfig.goalsAsk = $chk.Checked; $PanelConfig.goalsAskedOn = Get-Today; Save-PanelConfig $PanelConfig
+    if ($res -ne 'OK') { return }
+    # Thay danh sách hôm nay theo nội dung ô nhập, giữ trạng thái đã xong của mục trùng tên
+    $old = @(Get-TodayGoals)
+    foreach ($g in $old) { $script:goals.Remove($g) }
+    foreach ($line in ($tb.Text -split "`r?`n" | ForEach-Object { $_.Trim() -replace '^[-*•]\s*', '' } | Where-Object { $_ } | Select-Object -Unique)) {
+        $was = $old | Where-Object { $_.text -eq $line } | Select-Object -First 1
+        [void]$script:goals.Add([pscustomobject]@{ date = Get-Today; text = $line; done = [bool]($was -and $was.done) })
+    }
+    Save-Goals; Render-Goals
+    $n = @(Get-TodayGoals).Count
+    if ($n) { Set-Status "Đã lưu $n mục tiêu hôm nay - chúc một ngày làm việc hiệu quả!" }
+}
+# Mở panel lần đầu trong ngày -> hỏi; chiều tối còn việc chưa xong -> nhắc nhẹ 1 lần ở khay
+function Test-GoalsDaily {
+    if ($script:goalsDay -ne (Get-Today)) { Render-Goals }
+    if ($PanelConfig.goalsAsk -and $PanelConfig.goalsAskedOn -ne (Get-Today) -and -not @(Get-TodayGoals).Count -and $form.Visible) {
+        $PanelConfig.goalsAskedOn = Get-Today; Save-PanelConfig $PanelConfig
+        $tabs.SelectedTab = $pageMain
+        Show-GoalsDialog -Morning
+    }
+    $left = @(Get-TodayGoals | Where-Object { -not $_.done })
+    if ((Get-Date).Hour -ge 17 -and $left.Count -and $PanelConfig.goalsRemindedOn -ne (Get-Today)) {
+        $PanelConfig.goalsRemindedOn = Get-Today; Save-PanelConfig $PanelConfig
+        $tray.ShowBalloonTip(6000, 'Mục tiêu hôm nay', "Còn $($left.Count) mục tiêu chưa xong: " + (($left | Select-Object -First 3 | ForEach-Object text) -join ' · '), 'Info')
+    }
+}
+Load-Goals
+Render-Goals
+
+# ---------- Bố cục tab Dịch vụ: các nhóm bên trái, Mục tiêu bên phải; bảng trạng thái giãn theo chiều cao ----------
+function Update-MainLayout {
+    $w = $pageMain.ClientSize.Width; $h = $pageMain.ClientSize.Height
+    if ($w -lt 400 -or $h -lt 300) { return }
+    $gw = [math]::Min(360, [math]::Max(260, [int]($w * 0.32)))
+    $lw = $w - $gw - 20
+    $pgH = if ($script:pgCollapsed) { 26 } else { 74 }
+    $sh = [math]::Max(200, $h - 10 - (74 + $pgH + 74) - 8)
+    $y = 10
+    $gStatus.SetBounds(6, $y, $lw, $sh); $y += $sh + 4
+    $gUbuntu.SetBounds(6, $y, $lw, 70); $y += 74
+    if ($script:pgCollapsed) { $lnkPgExpand.Location = New-Object System.Drawing.Point(12, ($y + 3)) } else { $gPg.SetBounds(6, $y, $lw, 70) }
+    $y += $pgH
+    $gOther.SetBounds(6, $y, $lw, 70)
+    $gGoals.SetBounds(($lw + 12), 10, $gw, ($h - 18))
+}
+$gPg.Visible = -not $script:pgCollapsed; $lnkPgExpand.Visible = $script:pgCollapsed
 
 # Tuỳ chọn
 $settings = Get-Settings
@@ -2500,6 +2720,9 @@ $txtHelp.Location = New-Object System.Drawing.Point(12, 96); $txtHelp.Size = New
 $txtHelp.Text = @"
 DỊCH VỤ
   Bật / tắt WSL, PostgreSQL, K3s, Docker, Tailscale. Chuột phải một dòng để Start / Stop / Restart.
+  Nhóm PostgreSQL trong WSL thu gọn sẵn - bấm "▸ PostgreSQL…" để mở.
+  Mục tiêu hôm nay (bên phải): gõ rồi Enter để thêm, tick khi xong; chuột phải để sửa / để sang ngày mai / xoá.
+  Mỗi ngày lần đầu mở panel, trợ lý hỏi mục tiêu (tắt được trong hộp thoại); chiều tối còn việc chưa xong sẽ nhắc ở khay.
 
 ỨNG DỤNG
   • Chọn nhiều app: Ctrl / Shift + click, Ctrl+A. Start / Stop / Restart chạy cho cả loạt.
@@ -2873,6 +3096,10 @@ $updTimer = New-Object System.Windows.Forms.Timer
 $updTimer.Interval = 12 * 3600 * 1000          # 12 giờ kiểm tra lại 1 lần
 $updTimer.Add_Tick({ Start-UpdateCheck })
 
+$form.Add_Activated({ if ($script:goalsDay -and $script:goalsDay -ne (Get-Today)) { Test-GoalsDaily } })
+$goalsTimer = New-Object System.Windows.Forms.Timer; $goalsTimer.Interval = 10 * 60 * 1000
+$goalsTimer.Add_Tick({ Test-GoalsDaily }); $goalsTimer.Start()
+
 $form.Add_FormClosing({
     param($s, $e)
     if (-not $script:exiting -and $e.CloseReason -eq 'UserClosing') {
@@ -2905,6 +3132,9 @@ $form.Add_Shown({
         Set-Status 'Ubuntu đã được tự khởi động.'
     } else { Set-Status 'Sẵn sàng.' }
     $timer.Start()
+    Update-MainLayout
+    $goalT = New-Object System.Windows.Forms.Timer; $goalT.Interval = 1500
+    $goalT.Add_Tick({ param($sender, $e) $sender.Stop(); Test-GoalsDaily }); $goalT.Start()
     $firstUpd = New-Object System.Windows.Forms.Timer; $firstUpd.Interval = 4000
     $firstUpd.Add_Tick({ param($sender, $e) $sender.Stop(); Start-UpdateCheck; $updTimer.Start() }); $firstUpd.Start()
     $healthTimer.Start()
@@ -2918,8 +3148,10 @@ foreach ($pg in $tabs.TabPages) { $pg.Bounds = $tabs.DisplayRectangle }   # tab 
 $tabs.Anchor = 'Top, Bottom, Left, Right'
 $chkLogon.Anchor = 'Bottom, Left'; $chkAuto.Anchor = 'Bottom, Left'
 $statusLbl.Anchor = 'Bottom, Left, Right'
-foreach ($g in $pageMain.Controls) { if ($g -is [System.Windows.Forms.GroupBox]) { $g.Anchor = 'Top, Left, Right' } }
-$list.Anchor = 'Top, Left, Right'
+foreach ($g in $pageMain.Controls) { if ($g -is [System.Windows.Forms.GroupBox]) { $g.Anchor = 'Top, Left' } }      # vị trí do Update-MainLayout đặt
+$list.Anchor = 'Top, Bottom, Left, Right'
+foreach ($c in $gStatus.Controls) { if ($c -is [System.Windows.Forms.Button]) { $c.Anchor = 'Bottom, Left' } }
+$pageMain.Add_Resize({ Update-MainLayout })
 foreach ($m in $meters.Values) { $m.Bar.Anchor = 'Top, Left, Right'; $m.Label.Anchor = 'Top, Right' }
 foreach ($c in @($lblInfo, $lblWarn, $chart, $lblK3s, $lblApps)) { $c.Anchor = 'Top, Left, Right' }
 $flK3s.Anchor = 'Top, Right'
@@ -2979,7 +3211,7 @@ if (-not @($PanelConfig.scanRoots).Count -and -not @((Get-AppsConfig).Apps).Coun
 
 $form.FormBorderStyle = 'Sizable'
 $form.MaximizeBox = $true
-$form.MinimumSize = New-Object System.Drawing.Size(720, 650)
+$form.MinimumSize = New-Object System.Drawing.Size(860, 650)
 $wa = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
 $form.Size = New-Object System.Drawing.Size([math]::Min(980, $wa.Width), [math]::Min(720, $wa.Height))
 $form.Location = New-Object System.Drawing.Point(($wa.Left + ($wa.Width - $form.Width) / 2), ($wa.Top + ($wa.Height - $form.Height) / 2))

@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.2'
+$PanelVersion = '1.0.3'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -20,6 +20,10 @@ function Get-PanelConfig {
         autoStartUbuntu = $false
         theme           = ''          # light | dark; rỗng = theo Windows lần đầu
         showStats       = $false      # tab Ứng dụng: hiện cột CPU / RAM / Phản hồi
+        pgCollapsed     = $true       # tab Dịch vụ: thu gọn nhóm PostgreSQL trong WSL (ít dùng)
+        goalsAsk        = $true       # mỗi ngày hỏi mục tiêu khi mở panel
+        goalsAskedOn    = ''          # ngày đã hỏi gần nhất (yyyy-MM-dd)
+        goalsRemindedOn = ''          # ngày đã nhắc mục tiêu chưa xong lúc chiều
         scanRoots       = @()         # thư mục gốc để quét project cho tab Ứng dụng
     }
     if (Test-Path $ConfigFile) {
