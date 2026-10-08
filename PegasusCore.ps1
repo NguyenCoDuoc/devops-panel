@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.5'
+$PanelVersion = '1.0.6'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -1510,6 +1510,8 @@ public static class PccNativePower {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("powrprof.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.U1)]
     static extern bool SetSuspendState([MarshalAs(UnmanagedType.U1)] bool hibernate, [MarshalAs(UnmanagedType.U1)] bool force, [MarshalAs(UnmanagedType.U1)] bool disableWakeEvents);
+    [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool LockWorkStation();
     public static void EnableShutdownPrivilege() {
         IntPtr token;
         if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -1525,6 +1527,9 @@ public static class PccNativePower {
     public static void Sleep() {
         if (!SetSuspendState(false, false, false)) throw new Win32Exception(Marshal.GetLastWin32Error());
     }
+    public static void Lock() {
+        if (!LockWorkStation()) throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
 }
 "@
     }
@@ -1533,6 +1538,7 @@ public static class PccNativePower {
 
 function Invoke-PowerAction([string]$action) {
     switch ($action) {
+        'lock'     { [PccNativePower]::Lock() }
         'sleep'    { Enable-SystemSleepPrivilege; [PccNativePower]::Sleep() }
         'restart'  { shutdown.exe /r /t 15 /c "${AppName}: khởi động lại sau 15 giây" }
         'shutdown' { shutdown.exe /s /t 15 /c "${AppName}: tắt máy sau 15 giây" }

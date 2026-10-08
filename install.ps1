@@ -52,7 +52,7 @@ $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PegasusControl
 New-Item -Path $key -Force | Out-Null
 $props = @{
     DisplayName     = $AppName
-    DisplayVersion  = '1.0.5'
+    DisplayVersion  = '1.0.6'
     Publisher       = 'Develop Workspace'
     DisplayIcon     = "$exe,0"
     InstallLocation = $here

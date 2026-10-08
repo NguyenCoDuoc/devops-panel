@@ -17,13 +17,13 @@ using Microsoft.Win32;
 [assembly: AssemblyTitle("Develop Workspace Setup")]
 [assembly: AssemblyProduct("Develop Workspace")]
 [assembly: AssemblyDescription("Bộ cài Develop Workspace")]
-[assembly: AssemblyVersion("1.0.5.0")]
-[assembly: AssemblyFileVersion("1.0.5.0")]
+[assembly: AssemblyVersion("1.0.6.0")]
+[assembly: AssemblyFileVersion("1.0.6.0")]
 
 static class Setup
 {
     const string ProductId = "PegasusPanel";
-    const string Version = "1.0.5";
+    const string Version = "1.0.6";
     const string ExeName = "PegasusPanel.exe";
     const string SupportEmail = "coduoc2502@gmail.com";
 
