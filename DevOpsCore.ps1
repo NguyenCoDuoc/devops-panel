@@ -25,6 +25,10 @@ function Get-PanelConfig {
         goalsAskedOn    = ''          # ngày đã hỏi gần nhất (yyyy-MM-dd)
         goalsRemindedOn = ''          # ngày đã nhắc mục tiêu chưa xong lúc chiều
         scanRoots       = @()         # thư mục gốc để quét project cho tab Ứng dụng
+        aiTool          = 'claude'    # tab AI Code: claude | codex | gemini
+        aiMode          = 1           # 0 = chỉ đọc, 1 = cho sửa file, 2 = toàn quyền
+        aiModel         = ''          # rỗng = model mặc định của CLI
+        aiDirs          = @()         # thư mục làm việc dùng gần đây
     }
     if (Test-Path $ConfigFile) {
         $j = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -42,6 +46,7 @@ function Get-PanelConfig {
         Save-PanelConfig ([pscustomobject]$cfg)
     }
     $cfg.scanRoots = @($cfg.scanRoots | Where-Object { $_ })
+    $cfg.aiDirs = @($cfg.aiDirs | Where-Object { $_ })
     [pscustomobject]$cfg
 }
 function Save-PanelConfig($cfg) {
@@ -1146,17 +1151,58 @@ function Get-RepoBranches([string]$root) {
     }
 }
 
-# Lịch sử dạng graph: mỗi dòng = (phần graph, commit) - dòng chỉ có graph (nối nhánh) thì commit rỗng
+# Lịch sử commit + bố cục graph tự tính từ cha của từng commit (thay cho chữ ASCII của git log --graph):
+# mỗi commit nằm ở làn Col, màu Color; Segs = các đoạn @(kiểu, làn đầu, làn cuối, màu) để vẽ trong dòng đó
+#   kiểu 0 = làn đi xuyên dòng, 1 = nửa trên (từ commit con đổ vào chấm), 2 = nửa dưới (từ chấm ra commit cha)
+# Màu gắn với làn từ lúc làn mở nên một nhánh giữ nguyên màu suốt lịch sử.
 function Get-RepoCommits([string]$root, [int]$count = 300, [bool]$all = $true) {
-    $a = @('-c', 'core.quotePath=false', 'log', '--graph', '--date=format:%d/%m/%Y %H:%M', '--pretty=format:%x1e%H%x1f%h%x1f%an%x1f%ad%x1f%D%x1f%s', '-n', "$count")
+    $a = @('-c', 'core.quotePath=false', 'log', '--date-order', '--date=format:%d/%m/%Y %H:%M', '--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ad%x1f%D%x1f%s', '-n', "$count")
     if ($all) { $a += '--all' }
     $r = Invoke-Git $root $a 60000
     if ($r.Code -ne 0) { throw $r.Err }
+    $lanes = New-Object System.Collections.ArrayList      # mỗi làn đang chờ commit nào ($null = làn trống)
+    $colors = New-Object System.Collections.ArrayList
+    $next = 0
     foreach ($l in ($r.Out -split "`n")) {
-        $i = $l.IndexOf([char]0x1e)
-        if ($i -lt 0) { [pscustomobject]@{ Graph = $l.TrimEnd(); Hash = '' }; continue }
-        $f = $l.Substring($i + 1) -split [char]0x1f
-        [pscustomobject]@{ Graph = $l.Substring(0, $i).TrimEnd(); Hash = $f[0]; Short = $f[1]; Author = $f[2]; Date = $f[3]; Refs = $f[4]; Subject = ($f[5..($f.Count - 1)] -join ' ') }
+        $f = $l -split [char]0x1f
+        if ($f.Count -lt 7) { continue }
+        $h = $f[0]; $parents = @($f[2] -split ' ' | Where-Object { $_ })
+        $segs = New-Object System.Collections.ArrayList
+        $width = $lanes.Count
+        $col = $lanes.IndexOf($h)
+        $tip = $col -lt 0                                   # đầu nhánh: chưa commit con nào chờ
+        if ($tip) {
+            $col = $lanes.IndexOf($null)
+            if ($col -lt 0) { $col = $lanes.Add($null); [void]$colors.Add(0) }
+            $lanes[$col] = $h; $colors[$col] = $next++
+        }
+        $color = $colors[$col]
+        for ($k = 0; $k -lt $width; $k++) {
+            $w = $lanes[$k]
+            if ($null -eq $w) { continue }
+            if ($w -ne $h) { [void]$segs.Add(@(0, $k, $k, $colors[$k])); continue }
+            if ($k -ne $col) { [void]$segs.Add(@(1, $k, $col, $colors[$k])); $lanes[$k] = $null }       # nhánh khác nhập về commit này
+            elseif (-not $tip) { [void]$segs.Add(@(1, $col, $col, $color)) }
+        }
+        $lanes[$col] = $null
+        for ($i = 0; $i -lt $parents.Count; $i++) {
+            $p = $parents[$i]
+            $e = $lanes.IndexOf($p)
+            if ($e -ge 0) { [void]$segs.Add(@(2, $col, $e, $(if ($i -eq 0) { $color } else { $colors[$e] }))); continue }     # cha đã có làn chờ
+            if ($i -eq 0) { $e = $col }
+            else {
+                $e = $lanes.IndexOf($null)
+                if ($e -lt 0) { $e = $lanes.Add($null); [void]$colors.Add(0) }
+                $colors[$e] = $next++
+            }
+            $lanes[$e] = $p
+            [void]$segs.Add(@(2, $col, $e, $colors[$e]))
+        }
+        while ($lanes.Count -and $null -eq $lanes[$lanes.Count - 1]) { $lanes.RemoveAt($lanes.Count - 1); $colors.RemoveAt($colors.Count - 1) }
+        [pscustomobject]@{
+            Hash = $h; Short = $f[1]; Author = $f[3]; Date = $f[4]; Refs = $f[5]; Subject = ($f[6..($f.Count - 1)] -join ' ')
+            Merge = $parents.Count -gt 1; Col = $col; Color = $color; Lanes = [math]::Max([math]::Max($width, $lanes.Count), $col + 1); Segs = $segs.ToArray()
+        }
     }
 }
 
