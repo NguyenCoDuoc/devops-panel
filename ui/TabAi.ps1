@@ -241,10 +241,11 @@ function Install-AiSidebar {
                 })
 
                 # Click: mở session
-                $clickEntry = $sess
+                # Panel không có PerformClick -> label (chiếm gần hết dòng) gọi thẳng Open-AiSession bằng Tag của dòng
                 $rowPanel.Add_Click({ param($s, $e) Open-AiSession $s.Tag; Refresh-AiSidebar })
                 foreach ($ctrl in $rowPanel.Controls) {
-                    $ctrl.Add_Click({ param($s, $e) $s.Parent.PerformClick() })
+                    $ctrl.Cursor = 'Hand'
+                    $ctrl.Add_Click({ param($s, $e) Open-AiSession $s.Parent.Tag; Refresh-AiSidebar })
                 }
 
                 $pnlSideList.Controls.Add($rowPanel)

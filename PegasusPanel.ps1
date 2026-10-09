@@ -3307,6 +3307,30 @@ function Get-AiArgs([string]$tool, [string]$mode, [string]$model, [string]$sessi
     }
     @($a)
 }
+# Claude Code ưu tiên ANTHROPIC_API_KEY hơn tài khoản đăng nhập; chế độ "account" bỏ các biến này khi chạy CLI
+$AiClaudeEnv = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL')
+function Get-AiUnsetEnv([string]$tool) {
+    if ($tool -ne 'claude') { return @() }
+    if ($PanelConfig.aiClaudeAuth -eq 'account') { return $AiClaudeEnv }
+    if (Test-ClaudeKeyRejected) { return @('ANTHROPIC_API_KEY') }
+    @()
+}
+# Lúc chạy tương tác, Claude Code hỏi có dùng ANTHROPIC_API_KEY không và lưu 20 ký tự cuối của key vào ~/.claude.json
+# (customApiKeyResponses.rejected). Chế độ -p của panel bỏ qua lựa chọn đó -> panel tự làm giống chế độ tương tác.
+function Test-ClaudeKeyRejected {
+    $k = [string]$env:ANTHROPIC_API_KEY
+    if ($k.Length -lt 20) { return $false }
+    try {
+        $raw = [IO.File]::ReadAllText((Join-Path $env:USERPROFILE '.claude.json'))
+        $m = [regex]::Match($raw, '"customApiKeyResponses"\s*:\s*\{[^{}]*"rejected"\s*:\s*\[([^\]]*)\]')
+        return ($m.Success -and $m.Groups[1].Value.Contains('"' + $k.Substring($k.Length - 20) + '"'))
+    } catch { return $false }
+}
+function Set-ClaudeAuthAccount([bool]$on) {
+    $PanelConfig.aiClaudeAuth = $(if ($on) { 'account' } else { '' }); Save-PanelConfig $PanelConfig
+    Add-AiNote $(if ($on) { 'Claude Code: dùng tài khoản đăng nhập, bỏ qua ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL. Chưa đăng nhập hoặc phiên hết hạn: bấm "Mở terminal" rồi làm theo hướng dẫn đăng nhập (hoặc gõ /login).' }
+                 else { 'Claude Code: dùng lại ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL từ biến môi trường.' })
+}
 # .cmd (cài bằng npm) phải chạy qua cmd.exe
 function Get-AiCommand([string]$exe, [string[]]$cliArgs) {
     $joined = $cliArgs -join ' '
@@ -3538,6 +3562,24 @@ function Get-AiToolSummary($in) {
 }
 function Get-AiId([string]$id) { $id.Substring(0, [math]::Min(8, $id.Length)) }
 
+# Lỗi đăng nhập / model của Claude Code nằm trong result (stdout, subtype vẫn là success) -> giải thích cách sửa
+function Add-ClaudeErrorHint([string]$text) {
+    $base = $env:ANTHROPIC_BASE_URL
+    if ($text -match 'Invalid API key|Fix external API key') {
+        if ($env:ANTHROPIC_API_KEY -and $PanelConfig.aiClaudeAuth -ne 'account') {
+            Add-AiNote ("Biến môi trường ANTHROPIC_API_KEY trên máy đang thay cho tài khoản đăng nhập của Claude Code, và key này bị từ chối" +
+                $(if ($base) { " (ANTHROPIC_BASE_URL = $base)" } else { '' }) + '.')
+            $script:aiAskAuth = $true      # hỏi sau khi CLI xong (Complete-AiRun), không mở hộp thoại giữa lúc timer đang đọc
+        } else { Add-AiNote 'Tài khoản Claude Code không hợp lệ - bấm "Mở terminal", gõ /login để đăng nhập lại.' }
+    }
+    elseif ($text -match 'OAuth session expired|Not logged in|Please run /login|/login') {
+        Add-AiNote ('Phiên đăng nhập của Claude Code (CLI) đã hết hạn. CLI đăng nhập riêng, không dùng chung với Claude Desktop - ' +
+            'bấm "Mở terminal", gõ /login, chọn tài khoản Claude (Team) và đăng nhập trên trình duyệt; xong quay lại panel gửi lại.')
+    }
+    elseif ($text -match 'issue with the selected model|model.*may not exist') {
+        Add-AiNote ('Model này không dùng được với tài khoản hiện tại - chọn model khác ở chip Model' + $(if ($base) { " (đang đi qua ANTHROPIC_BASE_URL = $base, proxy này có thể không có model đó)" } else { '' }) + '.')
+    }
+}
 function Show-ClaudeEvent($j) {
     switch ($j.type) {
         'system' {
@@ -3557,7 +3599,7 @@ function Show-ClaudeEvent($j) {
             $info = @("$([math]::Round([double]$j.duration_ms / 1000))s")
             if ($j.num_turns) { $info += "$($j.num_turns) lượt" }
             if ($j.total_cost_usd) { $info += ('${0:0.000}' -f [double]$j.total_cost_usd) }
-            if ($j.is_error -or $j.subtype -ne 'success') { Add-AiError "Kết thúc lỗi ($($j.subtype)) · $($info -join ' · ')" } else { Add-AiNote "✓ Xong · $($info -join ' · ')" }
+            if ($j.is_error -or $j.subtype -ne 'success') { Add-AiError "Kết thúc lỗi ($($j.subtype)) · $($info -join ' · ')"; Add-ClaudeErrorHint ([string]$j.result) } else { Add-AiNote "✓ Xong · $($info -join ' · ')" }
             $den = @($j.permission_denials | Where-Object { $_ }).Count
             if ($den) { Add-AiNote "$den thao tác bị chặn do chế độ quyền hiện tại - chọn quyền cao hơn ở ô Quyền nếu muốn cho phép." }
         }
@@ -3713,15 +3755,49 @@ function Update-AiSessionsButton {
     $btnAiSessions.Text = $(if ($count) { "Phiên ($count) ▾" } else { 'Phiên ▾' })
     Update-AiTop
 }
+# File transcript Claude Code: ~/.claude/projects/<thư mục, ký tự không phải chữ/số thành '-'>/<session id>.jsonl
+function Find-ClaudeTranscript([string]$dir, [string]$id) {
+    $root = Join-Path $env:USERPROFILE '.claude\projects'
+    $f = Join-Path (Join-Path $root ($dir.TrimEnd('\') -replace '[^A-Za-z0-9]', '-')) "$id.jsonl"
+    if (Test-Path -LiteralPath $f) { return $f }
+    Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName "$id.jsonl" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+# Hiện lại các lượt cũ của phiên Claude Code (tối đa $max dòng hội thoại gần nhất); trả về số lượt người dùng đã hiện
+function Show-ClaudeHistory([string]$dir, [string]$id, [int]$max = 80) {
+    $f = Find-ClaudeTranscript $dir $id
+    if (-not $f) { return -1 }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($l in [IO.File]::ReadLines($f)) {        # file có thể vài MB (attachment) -> lọc chuỗi trước khi parse JSON
+        if ($l.StartsWith('{"') -and ($l.Contains('"type":"user"') -or $l.Contains('"type":"assistant"'))) { $lines.Add($l) }
+    }
+    $start = [math]::Max(0, $lines.Count - $max); $turns = 0
+    for ($i = $start; $i -lt $lines.Count; $i++) {
+        try { $j = $lines[$i] | ConvertFrom-Json } catch { continue }
+        if ($j.isSidechain -or $j.isMeta) { continue }
+        if ($j.message.model -eq '<synthetic>') {          # tin CLI tự sinh: lỗi API thì hiện dạng lỗi, còn lại ("No response requested.") bỏ
+            if ($j.isApiErrorMessage) { Add-AiError ([string](@($j.message.content)[0].text)) }
+            continue
+        }
+        if ($j.type -eq 'user' -and $j.message.content -is [string]) {
+            $t = [string]$j.message.content
+            if ($t.TrimStart().StartsWith('<')) { continue }       # lệnh / output nội bộ (<command-name>, <local-command-stdout>...)
+            Add-AiUser $t; $turns++
+        } elseif ($j.type -eq 'assistant' -or $j.type -eq 'user') { Show-ClaudeEvent $j }
+    }
+    $turns
+}
 function Open-AiSession($entry) {
     if (-not $entry -or $entry.Tool -notin $AiTools.Keys -or $entry.Id -notmatch '^[\w.:-]+$' -or -not (Test-Path $entry.Dir)) { return }
+    if ($script:aiRun) { Set-Status 'AI đang chạy; chờ xong hoặc dừng phiên hiện tại rồi mới mở phiên khác.'; return }
     $script:aiWorkspace = $true; $script:aiShown = $true; $aiChooser.Visible = $false
     foreach ($c in @($aiTop, $aiChat, $aiBottom)) { $c.Visible = $true }
     $cbAiTool.SelectedIndex = @($AiTools.Keys).IndexOf([string]$entry.Tool)
     $script:ai.Session = [string]$entry.Id; $script:ai.Key = "$($entry.Tool)|$($entry.Dir)"; $script:ai.Title = [string]$entry.Title; $script:ai.FullOk = $false
     Update-AiDirs ([string]$entry.Dir)
     Clear-AiChat; Show-AiWelcome
-    Add-AiNote "Đang tiếp tục phiên: $($entry.Title) · $(Split-Path $entry.Dir -Leaf). Các lượt trước vẫn nằm trong lịch sử CLI."
+    $shown = if ($entry.Tool -eq 'claude') { Show-ClaudeHistory ([string]$entry.Dir) ([string]$entry.Id) } else { -1 }
+    Add-AiNote $(if ($shown -ge 0) { "↑ Lịch sử phiên: $($entry.Title) · $(Split-Path $entry.Dir -Leaf). Gửi yêu cầu mới để làm tiếp - AI vẫn nhớ các lượt trên." }
+                 else { "Đang tiếp tục phiên: $($entry.Title) · $(Split-Path $entry.Dir -Leaf). Panel không đọc được lịch sử cũ nhưng CLI vẫn nhớ - gửi yêu cầu mới để làm tiếp." })
     Update-AiChips; Update-AiTop; Update-AiLayout
     Set-Status "Đã mở phiên $($entry.Title). Gửi yêu cầu mới để tiếp tục."
 }
@@ -3805,7 +3881,14 @@ $txtAiIn.Multiline = $true; $txtAiIn.AcceptsReturn = $true; $txtAiIn.BorderStyle
 $txtAiIn.Font = New-Object System.Drawing.Font('Segoe UI', 10.5)
 $aiInBox.Controls.Add($txtAiIn)
 $lblAiHint = New-AiLabel 'Giao việc cho AI, vd: "Thêm API lọc đơn hàng theo trạng thái"   (Enter gửi · Shift+Enter xuống dòng)' 'Muted' $txtAiIn.Font
-$lblAiHint.Location = New-Object System.Drawing.Point(1, 1); $lblAiHint.Cursor = 'IBeam'
+# Label là control con nằm đè lên ô nhập -> đặt sau vị trí con trỏ đầu dòng (lề trái của TextBox, đổi theo DPI)
+# 2px để con trỏ nhấp nháy không bị che
+$lblAiHint.Location = New-Object System.Drawing.Point(6, 1); $lblAiHint.Cursor = 'IBeam'
+$txtAiIn.Add_HandleCreated({
+    if ($txtAiIn.TextLength) { return }
+    $txtAiIn.Text = 'x'; $x = $txtAiIn.GetPositionFromCharIndex(0).X; $txtAiIn.Text = ''
+    $lblAiHint.Left = [math]::Max(2, $x) + 2
+})
 $lblAiHint.Add_Click({ [void]$txtAiIn.Focus() })
 $txtAiIn.Controls.Add($lblAiHint)
 $script:aiInLines = 0
@@ -3837,6 +3920,9 @@ $btnAiTool = New-AiChip 'Claude Code' $aiInBox {
         @{ Text = $t.Name + $(if (Find-AiExe $t.Exe) { '' } else { '   (chưa cài)' }); Arg = $i; Checked = ($i -eq $cbAiTool.SelectedIndex); Click = { param($s, $e) $cbAiTool.SelectedIndex = [int]$s.Tag } }
     })
     $items += '-'
+    if ((Get-AiToolKey) -eq 'claude') {
+        $items += @{ Text = 'Claude Code: dùng tài khoản đăng nhập (bỏ qua ANTHROPIC_API_KEY)'; Checked = ($PanelConfig.aiClaudeAuth -eq 'account'); Click = { Set-ClaudeAuthAccount ($PanelConfig.aiClaudeAuth -ne 'account') } }
+    }
     $items += @{ Text = 'Cài / cập nhật CLI…'; Click = { Install-AiCli } }
     Show-AiMenu $btnAiTool $items -Up
 }
@@ -4012,9 +4098,18 @@ function Update-AiChips {
     $lblAiTitle.Text = $(if ($script:ai.Title) { $script:ai.Title } else { 'Phiên mới' })
     Update-AiTop; Update-AiBottom
 }
+# Model lưu chung một ô cấu hình cho mọi công cụ -> đổi công cụ thì bỏ model của công cụ khác (vd gpt-5.5 lọt sang Claude Code)
+function Get-AiModelFor([string]$tool, [string]$model) {
+    if (-not $model) { return '' }
+    foreach ($k in $AiTools.Keys) { if ($k -ne $tool -and $model -in @($AiTools[$k].Models)) { return '' } }
+    $other = @{ claude = '^(gpt|o\d|codex|gemini)'; codex = '^(sonnet|opus|haiku|claude|gemini)'; gemini = '^(sonnet|opus|haiku|claude|gpt|o\d)' }[$tool]
+    if ($other -and $model -match $other) { return '' }
+    $model
+}
 function Update-AiModels {
     $cbAiModel.Items.Clear()
     foreach ($m in @($AiTools[(Get-AiToolKey)].Models)) { [void]$cbAiModel.Items.Add($m) }
+    $cbAiModel.Text = Get-AiModelFor (Get-AiToolKey) $cbAiModel.Text
 }
 # Màn hình trống / trạng thái cài đặt CLI
 function Show-AiWelcome {
@@ -4088,6 +4183,8 @@ function Send-AiPrompt {
     }
     $model = $cbAiModel.Text.Trim()
     if ($model -notmatch '^[\w.:/@-]*$') { Set-Status 'Tên model không hợp lệ.'; return }
+    $fit = Get-AiModelFor $tool $model
+    if ($fit -ne $model) { Add-AiNote "Bỏ model $model vì không thuộc $($t.Name) - dùng model mặc định."; $model = $fit; $cbAiModel.Text = $fit }
     if ($tool -eq 'codex' -and $model -in @('', 'gpt-5.4', 'gpt-5.4-mini')) {
         $model = 'gpt-5.5'
         Add-AiNote 'Panel dùng gpt-5.5 cho Codex vì model gpt-5.4 hiện không được tài khoản ChatGPT này hỗ trợ.'
@@ -4113,7 +4210,7 @@ function Send-AiPrompt {
     $sync = [hashtable]::Synchronized(@{ Q = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'; Done = $false; Exit = $null; Err = ''; Pid = 0 })
     $rs = [runspacefactory]::CreateRunspace(); $rs.Open()
     $rs.SessionStateProxy.SetVariable('sync', $sync)
-    $rs.SessionStateProxy.SetVariable('job', @{ File = $cmd.File; Args = $cmd.Args; Dir = $dir; Prompt = $prompt })
+    $rs.SessionStateProxy.SetVariable('job', @{ File = $cmd.File; Args = $cmd.Args; Dir = $dir; Prompt = $prompt; Unset = @(Get-AiUnsetEnv $tool) })
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         try {
@@ -4123,6 +4220,7 @@ function Send-AiPrompt {
             $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
             $psi.StandardOutputEncoding = [Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
             $psi.EnvironmentVariables['NO_COLOR'] = '1'
+            foreach ($n in $job.Unset) { $psi.EnvironmentVariables.Remove($n) }
             $p = [System.Diagnostics.Process]::Start($psi)
             $sync.Pid = $p.Id
             $errTask = $p.StandardError.ReadToEndAsync()
@@ -4169,6 +4267,16 @@ function Complete-AiRun {
     $r.PS.Dispose(); $r.RS.Dispose()
     Update-AiUi
     Update-AiContext -Note        # dải repo cập nhật +/- ; có thay đổi thì nhắc review
+    if ($script:aiAskAuth) {
+        $script:aiAskAuth = $false
+        $q = "Claude Code đang dùng ANTHROPIC_API_KEY trong biến môi trường và key này bị từ chối.`n`n" +
+             "Chuyển sang dùng tài khoản đăng nhập Claude (panel bỏ qua ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL khi chạy Claude Code)?`n" +
+             "Biến môi trường của Windows không bị sửa. Đổi lại được ở chip Claude Code."
+        if ([System.Windows.Forms.MessageBox]::Show($q, 'Claude Code', 'YesNo', 'Question') -eq 'Yes') {
+            Set-ClaudeAuthAccount $true
+            Open-AiTerminal        # Claude Code tương tác: chưa đăng nhập / phiên hết hạn thì nó hiện bước đăng nhập
+        }
+    }
     if (-not $form.ContainsFocus) { $tray.ShowBalloonTip(4000, $r.Name, 'Đã trả lời xong.', 'Info') }
 }
 $aiTimer = New-Object System.Windows.Forms.Timer
@@ -4200,6 +4308,9 @@ function Open-AiTerminal {
     $sess = if ($script:ai.Key -eq "$tool|$dir" -and $script:ai.Session -match '^[\w.:-]+$') { $script:ai.Session } else { $null }
     $model = $cbAiModel.Text.Trim(); if ($model -notmatch '^[\w.:/@-]*$') { $model = '' }
     $line = ("`"$exe`" " + ((Get-AiArgs $tool 'edit' $model $sess -Interactive) -join ' ')).Trim()
+    # Bỏ biến trong chính lệnh cmd: tab mới của Windows Terminal lấy môi trường của cửa sổ WT đang mở, không phải của panel
+    $unset = @(Get-AiUnsetEnv $tool | ForEach-Object { "set `"$_=`" & " }) -join ''
+    $line = $unset + $line
     if (Get-Command wt.exe) { Start-Process wt.exe -ArgumentList "-d `"$($dir.TrimEnd('\'))`" --title `"$($t.Name)`" cmd /k $line" }
     else { Start-Process cmd.exe -ArgumentList "/k $line" -WorkingDirectory $dir }
 }
@@ -4234,7 +4345,7 @@ function Install-AiCli {
 function Show-AiFor([string]$dir) { $tabs.SelectedTab = $pageAi; Update-AiDirs $dir }
 
 $cbAiTool.SelectedIndex = [math]::Max(0, @($AiTools.Keys).IndexOf([string]$PanelConfig.aiTool))
-$cbAiModel.Text = [string]$PanelConfig.aiModel
+$cbAiModel.Text = Get-AiModelFor (Get-AiToolKey) ([string]$PanelConfig.aiModel)
 Update-AiUi
 
 # ---------- Khay hệ thống ----------

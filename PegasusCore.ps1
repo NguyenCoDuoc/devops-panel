@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.6'
+$PanelVersion = '1.0.7'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -28,6 +28,7 @@ function Get-PanelConfig {
         aiTool          = 'claude'    # tab AI Code: claude | codex | gemini
         aiMode          = 1           # 0 = chỉ đọc, 1 = cho sửa file, 2 = toàn quyền
         aiModel         = ''          # rỗng = model mặc định của CLI
+        aiClaudeAuth    = ''          # Claude Code: rỗng = theo biến môi trường; account = bỏ ANTHROPIC_API_KEY/BASE_URL, dùng tài khoản /login
         aiDirs          = @()         # thư mục làm việc dùng gần đây
         aiSessions      = @()         # các phiên AI gần đây, nhóm theo thư mục
         navLayout       = 'top'       # menu tab: top = trên dải tiêu đề, side = thanh bên trái
@@ -1494,7 +1495,7 @@ function Get-HealthInfo {
 }
 
 # ---------- Nguồn máy tính ----------
-function Enable-SystemSleepPrivilege {
+function Initialize-SystemPowerNative {
     if (-not ('PccNativePower' -as [type])) {
         Add-Type -ErrorAction Stop -TypeDefinition @"
 using System;
@@ -1512,6 +1513,7 @@ public static class PccNativePower {
     static extern bool SetSuspendState([MarshalAs(UnmanagedType.U1)] bool hibernate, [MarshalAs(UnmanagedType.U1)] bool force, [MarshalAs(UnmanagedType.U1)] bool disableWakeEvents);
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool LockWorkStation();
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     public static void EnableShutdownPrivilege() {
         IntPtr token;
         if (!OpenProcessToken(GetCurrentProcess(), 0x28, out token)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -1525,7 +1527,10 @@ public static class PccNativePower {
         } finally { CloseHandle(token); }
     }
     public static void Sleep() {
-        if (!SetSuspendState(false, false, false)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (SetSuspendState(false, false, false)) return;
+        int error = Marshal.GetLastWin32Error();
+        if (error != 50) throw new Win32Exception(error);
+        SendMessage(new IntPtr(0xffff), 0x0112, new IntPtr(0xF170), new IntPtr(2));
     }
     public static void Lock() {
         if (!LockWorkStation()) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -1533,12 +1538,16 @@ public static class PccNativePower {
 }
 "@
     }
+}
+
+function Enable-SystemSleepPrivilege {
+    Initialize-SystemPowerNative
     [PccNativePower]::EnableShutdownPrivilege()
 }
 
 function Invoke-PowerAction([string]$action) {
     switch ($action) {
-        'lock'     { [PccNativePower]::Lock() }
+        'lock'     { Initialize-SystemPowerNative; [PccNativePower]::Lock() }
         'sleep'    { Enable-SystemSleepPrivilege; [PccNativePower]::Sleep() }
         'restart'  { shutdown.exe /r /t 15 /c "${AppName}: khởi động lại sau 15 giây" }
         'shutdown' { shutdown.exe /s /t 15 /c "${AppName}: tắt máy sau 15 giây" }
