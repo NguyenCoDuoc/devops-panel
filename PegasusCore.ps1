@@ -18,7 +18,8 @@ function Get-PanelConfig {
         distro          = ''          # rỗng = tự chọn distro Ubuntu đầu tiên
         pgUbuntuPort    = 0           # 0 = không có PostgreSQL trong WSL
         autoStartUbuntu = $false
-        theme           = ''          # light | dark; rỗng = theo Windows lần đầu
+        theme           = ''          # light | dark | modern | atelier | aurora; rỗng = theo Windows lần đầu
+        colorScheme     = 'indigo'    # bảng màu giao diện, độc lập với sáng / tối
         showStats       = $false      # tab Ứng dụng: hiện cột CPU / RAM / Phản hồi
         pgCollapsed     = $true       # tab Dịch vụ: thu gọn nhóm PostgreSQL trong WSL (ít dùng)
         goalsAsk        = $true       # mỗi ngày hỏi mục tiêu khi mở panel
@@ -50,6 +51,8 @@ function Get-PanelConfig {
         }
         Save-PanelConfig ([pscustomobject]$cfg)
     }
+    $cfg.colorScheme = ([string]$cfg.colorScheme).ToLowerInvariant()
+    if ($cfg.colorScheme -notin 'indigo', 'ocean', 'teal', 'violet', 'graphite') { $cfg.colorScheme = 'indigo' }
     # Migrate tên thương hiệu cũ, giữ nguyên tên tuỳ chỉnh trong Cài đặt.
     if ($cfg.appName -in @('SH Dev Panel', 'DevOps Panel', 'DUOCNC DevOps Panel', 'Pegasus Control Center', 'Pegasus Control Center Panel', 'Develop Workspace Panel', 'DEV SH Panel')) { $cfg.appName = 'Develop Workspace'; Save-PanelConfig ([pscustomobject]$cfg) }
     $cfg.scanRoots = @($cfg.scanRoots | Where-Object { $_ })
@@ -58,7 +61,7 @@ function Get-PanelConfig {
     [pscustomobject]$cfg
 }
 function Save-PanelConfig($cfg) {
-    $cfg | ConvertTo-Json -Depth 4 | Set-Content $ConfigFile -Encoding UTF8
+    $cfg | ConvertTo-Json -Depth 4 | Set-Content $ConfigFile -Encoding UTF8 -ErrorAction Stop
 }
 
 # Chạy exe có timeout: máy chưa cài / bị chặn WSL thì wsl.exe có thể treo rất lâu
@@ -1223,10 +1226,14 @@ function Get-RepoBranches([string]$root) {
 # mỗi commit nằm ở làn Col, màu Color; Segs = các đoạn @(kiểu, làn đầu, làn cuối, màu) để vẽ trong dòng đó
 #   kiểu 0 = làn đi xuyên dòng, 1 = nửa trên (từ commit con đổ vào chấm), 2 = nửa dưới (từ chấm ra commit cha)
 # Màu gắn với làn từ lúc làn mở nên một nhánh giữ nguyên màu suốt lịch sử.
-function Get-RepoCommits([string]$root, [int]$count = 300, [bool]$all = $true) {
+function Get-RepoCommits([string]$root, [int]$count = 300, [bool]$all = $true, [string]$revision = '') {
     $a = @('-c', 'core.quotePath=false', 'log', '--date-order', '--date=format:%d/%m/%Y %H:%M', '--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ad%x1f%D%x1f%s', '-n', "$count")
-    if ($all) { $a += '--all' }
+    if ($revision) {
+        if ($revision.StartsWith('-') -or $revision -match '[\s\x00]') { throw 'Ref không hợp lệ' }
+        $a += $revision
+    } elseif ($all) { $a += '--all' }
     $r = Invoke-Git $root $a 60000
+    if ($r.Code -ne 0 -and $r.Err -match 'does not have any commits|bad default revision') { return }
     if ($r.Code -ne 0) { throw $r.Err }
     $lanes = New-Object System.Collections.ArrayList      # mỗi làn đang chờ commit nào ($null = làn trống)
     $colors = New-Object System.Collections.ArrayList
@@ -1272,6 +1279,48 @@ function Get-RepoCommits([string]$root, [int]$count = 300, [bool]$all = $true) {
             Merge = $parents.Count -gt 1; Col = $col; Color = $color; Lanes = [math]::Max([math]::Max($width, $lanes.Count), $col + 1); Segs = $segs.ToArray()
         }
     }
+}
+
+function Get-RepoBrowserData([string]$root) {
+    $remotes = (Invoke-Git $root @('remote')).Out -split "`n" | Where-Object { $_ }
+    $modules = @()
+    if (Test-Path -LiteralPath (Join-Path $root '.gitmodules')) {
+        $modules = @((Invoke-Git $root @('config', '--file', '.gitmodules', '--get-regexp', '^submodule\..*\.path$')).Out -split "`n" | Where-Object { $_ } | ForEach-Object { ($_ -split ' ', 2)[1] })
+    }
+    [pscustomobject]@{ Branches = @(Get-RepoBranches $root); Branch = (Invoke-Git $root @('symbolic-ref', '--short', '-q', 'HEAD')).Out; Changes = @(Get-RepoChanges $root); Remotes = @($remotes); Submodules = $modules }
+}
+
+function Get-RepoFileTree([string]$root, [string]$revision) {
+    if ($revision -eq 'working') { $a = @('ls-files', '-z', '--cached', '--others', '--exclude-standard') }
+    elseif ($revision -eq 'index') { $a = @('ls-files', '-z') }
+    elseif ($revision -match '^[0-9a-f]{7,40}$') { $a = @('ls-tree', '-r', '--name-only', '-z', $revision) }
+    else { throw 'Revision không hợp lệ' }
+    $r = Invoke-Git $root $a
+    if ($r.Code -ne 0) { throw $r.Err }
+    $r.Out -split [char]0 | Where-Object { $_ }
+}
+
+function Get-RepoFileContent([string]$root, [string]$revision, [string]$path) {
+    if ($revision -eq 'working') {
+        $full = [IO.Path]::GetFullPath((Join-Path $root $path))
+        $base = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+        if (-not $full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw 'File nằm ngoài repository' }
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '(File đã bị xóa hoặc là submodule)' }
+        if ((Get-Item -LiteralPath $full).Length -gt 512KB) { return '(File lớn hơn 512 KB; mở bằng editor để xem)' }
+        $content = Get-Content -LiteralPath $full -Raw -Encoding UTF8
+        if ($content -and $content.Contains([string][char]0)) { return '(File nhị phân; mở bằng ứng dụng phù hợp)' }
+        return $content
+    }
+    if ($revision -eq 'index') { $object = ":$path" }
+    elseif ($revision -match '^[0-9a-f]{7,40}$') { $object = "$($revision):$path" }
+    else { throw 'Revision không hợp lệ' }
+    $size = Invoke-Git $root @('cat-file', '-s', $object)
+    if ($size.Code -ne 0) { throw $size.Err }
+    if ([long]$size.Out -gt 512KB) { return '(File lớn hơn 512 KB; mở bằng editor để xem)' }
+    $r = Invoke-Git $root @('show', $object)
+    if ($r.Code -ne 0) { throw $r.Err }
+    if ($r.Out.Contains([string][char]0)) { return '(File nhị phân; mở bằng ứng dụng phù hợp)' }
+    $r.Out
 }
 
 function Get-CommitDetail([string]$root, [string]$hash) {

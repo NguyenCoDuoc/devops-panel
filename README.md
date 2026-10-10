@@ -14,8 +14,8 @@ Develop Workspace là ứng dụng Windows nhỏ để theo dõi và điều khi
 ## Chức năng
 
 - **Dịch vụ:** bật / tắt Ubuntu trên WSL, PostgreSQL (Windows hoặc WSL), K3s trong WSL, Docker Desktop và Tailscale khi các thành phần tương ứng được cài.
-- **Ứng dụng:** quét project .NET và Vite, chạy / dừng / khởi động lại nhiều app cùng lúc, trạng thái đang khởi động trên từng dòng, báo app sập và tự khởi động lại, bộ app (chạy theo thứ tự tool → backend → BFF → frontend), tìm kiếm, sắp xếp cột, cột CPU / RAM / phản hồi HTTP (tùy chọn), giải phóng port bị chiếm, xuất / nhập danh mục app cho team.
-- **Git:** tất cả repo trong danh mục, fetch / pull nhiều repo, tạo nhánh theo git-flow (`feature/` `fix/` `bugfix/` từ `main`, `hotfix/` từ `production`), push và mở Merge Request đúng nhánh đích, cửa sổ Git kiểu Git Extensions (cây nhánh, graph commit, diff), màn hình Commit (stage / unstage, diff, commit).
+- **Ứng dụng:** quét project .NET và Vite, chạy / dừng / khởi động lại nhiều app cùng lúc, trạng thái đang khởi động trên từng dòng, báo app sập và tự khởi động lại, bộ app (chạy theo thứ tự tool → backend → BFF → frontend), tìm kiếm, sắp xếp cột, cột CPU / RAM / phản hồi HTTP (tùy chọn), giải phóng port bị chiếm, **public port ra Internet qua Dev Tunnels** (chuột phải app đang chạy → *Public ra Internet*, giống Forward Port của VS Code; cần `devtunnel` CLI, panel gợi ý cài bằng winget và đăng nhập GitHub/Microsoft lần đầu; link tự copy, thoát panel tự dừng), xuất / nhập danh mục app cho team.
+- **Git:** chọn hoặc mở repository ngay trong tab, cây Branches/Remotes/Tags/Submodules, graph commit và nhãn ref, Working directory/Commit index, các tab Commit/Diff/File tree/Console. Fetch, pull fast-forward, commit, tạo nhánh theo git-flow và Push + MR thao tác trên repo đang mở. Chọn nhánh để xem lịch sử; double-click để checkout có xác nhận. Cửa sổ Commit tách file chưa stage/đã stage, xem diff, stage/unstage và commit.
 - **Sức khỏe máy:** CPU, RAM, WSL, pin, mạng, tiến trình nặng nhất, cảnh báo ở khay hệ thống.
 - **K3s:** node, pod, xem log, describe, khởi động lại pod, mở k9s.
 - **Giao diện:** sáng / tối, icon outline, tab Trợ giúp (F1), chẩn đoán tốc độ cho máy chạy chậm.
@@ -60,7 +60,13 @@ File đầu ra là `dist\PegasusPanel-Setup.exe`. Số phiên bản lấy từ `
 
 ## Cấu hình
 
-Thiết lập người dùng được lưu ở `%APPDATA%\PegasusPanel\config.json` và `%APPDATA%\PegasusPanel\apps.json`. Tab **Cài đặt** cho phép đổi tên hiển thị, chọn giao diện sáng / tối, distro WSL, port PostgreSQL trong WSL và thư mục quét project. `pgUbuntuPort = 0` nghĩa là không theo dõi PostgreSQL trong WSL.
+Thiết lập người dùng được lưu ở `%APPDATA%\PegasusPanel\config.json` và `%APPDATA%\PegasusPanel\apps.json`. Tab **Cài đặt** cho phép đổi tên hiển thị, chọn giao diện, distro WSL, port PostgreSQL trong WSL và thư mục quét project. `pgUbuntuPort = 0` nghĩa là không theo dõi PostgreSQL trong WSL.
+
+Trong **Cài đặt → Giao diện & màu sắc**, chọn **Light, Dark, Modern, Atelier hoặc Aurora**. Atelier dùng nền giấy ấm, navbar xanh mực và card nét đồng với tiêu đề serif; Aurora dùng nền xanh đêm, mint, navbar chuyển sắc và card bo mềm. Hai chế độ này có phối màu riêng. Modern dùng nền sáng dịu, navbar chuyển sắc theo màu nhấn và card bo 12px có bóng mềm. Light/Dark/Modern cho phép chọn màu nhấn **Indigo, Ocean, Teal, Violet hoặc Graphite**; lựa chọn được giữ lại khi chuyển sang Atelier/Aurora rồi quay về. Thay đổi áp dụng ngay và tự lưu. Nút **Mặc định** khôi phục Indigo, giữ các cài đặt khác. Cấu hình cũ hoặc màu nhấn không hợp lệ tự dùng Indigo.
+
+Kiểm tra UI độc lập (không gọi dịch vụ hoặc dùng cấu hình thật): `powershell -NoProfile -ExecutionPolicy Bypass -File tests/Theme.Tests.ps1`. Thêm `-PreviewDirectory docs/theme-previews` để render các control Cài đặt, DB Helper và trường hợp text dài của từng chế độ.
+
+Kiểm tra tab Git và stage/commit trên repository tạm: `powershell -NoProfile -ExecutionPolicy Bypass -File tests/Git.Tests.ps1`. Kiểm tra này không gọi remote hoặc thay đổi repo dự án. Luồng và phạm vi triển khai được ghi tại [docs/git-extensions-redesign.md](docs/git-extensions-redesign.md).
 
 Danh mục `apps.json` gồm `scanRanges`, `apps`, `profiles` (bộ app) và `removed` (app đã gỡ khỏi panel). Mỗi app có thể khai báo `id`, `group`, `name`, `type`, `port`, `url`, `dir`, lệnh `start` và `autoRestart`. `type` thường là `backend`, `bff`, `frontend` hoặc `tool`; app `tool` không cần port.
 

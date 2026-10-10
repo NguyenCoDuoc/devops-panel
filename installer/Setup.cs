@@ -24,7 +24,7 @@ static class Setup
 {
     const string ProductId = "PegasusPanel";
     const string Version = "1.0.7";
-    const string ExeName = "PegasusPanel.exe";
+    const string ExeName = "Develop Workspace.exe";
     const string SupportEmail = "coduoc2502@gmail.com";
 
     [STAThread]
@@ -46,9 +46,12 @@ static class Setup
         try
         {
             // Đóng bản đang chạy để ghi đè được file
-            foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(ExeName)))
+            foreach (var name in new[] { "Develop Workspace", "PegasusPanel", "DevOps" })
             {
-                try { p.Kill(); p.WaitForExit(5000); } catch { }
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try { p.Kill(); p.WaitForExit(5000); } catch { }
+                }
             }
 
             Directory.CreateDirectory(installDir);
