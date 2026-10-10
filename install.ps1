@@ -22,6 +22,7 @@ Start-Sleep -Milliseconds 800
 Write-Host "== Build $exe"
 & $csc /nologo /target:winexe /optimize+ "/out:$exe" "/win32icon:$icon" "/r:$sma" /r:System.Windows.Forms.dll $src
 if ($LASTEXITCODE -ne 0) { throw "Build lỗi (csc exit $LASTEXITCODE)" }
+Copy-Item $exe (Join-Path $here 'PegasusPanel.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $here 'Pegasus Control Center.exe'), (Join-Path $here 'SH Dev Panel.exe') -Force -ErrorAction SilentlyContinue
 
 function New-Shortcut([string]$path) {

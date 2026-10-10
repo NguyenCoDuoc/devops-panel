@@ -29,9 +29,10 @@ Write-Host "== Phiên bản $ver"
 Remove-Item $stage, $zip, $setup -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage, (Join-Path $stage 'wsl') | Out-Null
 
-Write-Host '== 1/3 Launcher PegasusPanel.exe'
-& $csc /nologo /target:winexe /optimize+ "/out:$stage\PegasusPanel.exe" "/win32icon:$here\icon.ico" "/r:$sma" /r:System.Windows.Forms.dll "$here\app\PegasusApp.cs"
+Write-Host '== 1/3 Launcher Develop Workspace.exe'
+& $csc /nologo /target:winexe /optimize+ "/out:$stage\Develop Workspace.exe" "/win32icon:$here\icon.ico" "/r:$sma" /r:System.Windows.Forms.dll "$here\app\PegasusApp.cs"
 if ($LASTEXITCODE -ne 0) { throw 'Build launcher lỗi' }
+Copy-Item "$stage\Develop Workspace.exe" "$stage\PegasusPanel.exe" -Force
 
 Write-Host '== 2/3 Payload'
 Copy-Item "$here\PegasusPanel.ps1", "$here\PegasusCore.ps1", "$here\icon.ico" $stage
