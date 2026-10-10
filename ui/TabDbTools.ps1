@@ -13,12 +13,12 @@ function Build-TabDbTools($page) {
     # ══════════════════════════════════════════════════════════════════════
     # NHÓM 1 — Migration Tools
     # ══════════════════════════════════════════════════════════════════════
-    $gMig = New-Group 'Database Migrations  (1-Click)' 6 210 $page
+    $gMig = New-Group 'Database Migrations  (1-Click)' 6 232 $page
 
     $lblMigInfo = New-Object System.Windows.Forms.Label
     $lblMigInfo.Text      = 'Phát hiện tự động Migrator projects từ apps.json. Chọn và nhấn Chạy Migration:'
-    $lblMigInfo.Location  = New-Object System.Drawing.Point(12, 24)
-    $lblMigInfo.Size      = New-Object System.Drawing.Size(486, 18)
+    $lblMigInfo.Location  = New-Object System.Drawing.Point(12, 30)
+    $lblMigInfo.Size      = New-Object System.Drawing.Size(486, 36)
     $lblMigInfo.ForeColor = $Theme.Muted
     $gMig.Controls.Add($lblMigInfo)
 
@@ -27,10 +27,18 @@ function Build-TabDbTools($page) {
     $lstMig.FullRowSelect = $true
     $lstMig.MultiSelect   = $false
     $lstMig.GridLines     = $false
-    $lstMig.Location      = New-Object System.Drawing.Point(12, 46)
-    $lstMig.Size          = New-Object System.Drawing.Size(486, 100)
+    $lstMig.Location      = New-Object System.Drawing.Point(12, 70)
+    $lstMig.Size          = New-Object System.Drawing.Size(486, 110)
     $lstMig.BackColor     = $Theme.Surface
     $lstMig.ForeColor     = $Theme.Text
+    if ($lvDrawHeader) {
+        $lstMig.Add_DrawColumnHeader($lvDrawHeader)
+        $lstMig.Add_DrawItem($lvDrawItem)
+        $lstMig.Add_DrawSubItem($lvDrawSubItem)
+        $lstMig.OwnerDraw = $true
+        Set-RowHeight $lstMig 28
+        Set-DoubleBuffered $lstMig
+    }
     [void]$lstMig.Columns.Add('Migrator / Project', 220)
     [void]$lstMig.Columns.Add('Nhóm', 80)
     [void]$lstMig.Columns.Add('Thư mục', 170)
@@ -49,13 +57,15 @@ function Build-TabDbTools($page) {
     }
 
     if (-not $migApps.Count) {
-        $empty = New-Object System.Windows.Forms.ListViewItem('(Không tìm thấy Migrator project trong apps.json)')
-        $empty.ForeColor = $Theme.Muted
-        [void]$lstMig.Items.Add($empty)
+        $empty = New-Object System.Windows.Forms.Label
+        $empty.Text = 'Chưa có Migrator trong apps.json. Thêm project dạng tool hoặc có tên chứa "migrat".'
+        $empty.SetBounds(12, 30, 460, 62); $empty.Anchor = 'Top, Left, Right'
+        $empty.Name = 'bg:Surface'; $empty.BackColor = $Theme.Surface; $empty.ForeColor = $Theme.Muted
+        $empty.TextAlign = 'MiddleCenter'; $lstMig.Controls.Add($empty)
     }
 
     # Hàng nút migration
-    $btnRunMig = New-Button 'Chạy Migration' 12 154 150 $gMig {
+    $btnRunMig = New-Button 'Chạy Migration' 12 188 150 $gMig {
         if (-not $lstMig.SelectedItems.Count -or -not $lstMig.SelectedItems[0].Tag) {
             [System.Windows.Forms.MessageBox]::Show('Vui lòng chọn một Migrator.', 'DB Helper') | Out-Null
             return
@@ -71,7 +81,7 @@ function Build-TabDbTools($page) {
     }
     $btnRunMig.Tag = 'primary'
 
-    $btnEfUpdate = New-Button 'EF: database update' 168 154 160 $gMig {
+    $btnEfUpdate = New-Button 'EF: database update' 168 188 160 $gMig {
         if (-not $lstMig.SelectedItems.Count -or -not $lstMig.SelectedItems[0].Tag) {
             [System.Windows.Forms.MessageBox]::Show('Vui lòng chọn dự án.', 'DB Helper') | Out-Null
             return
@@ -83,7 +93,7 @@ function Build-TabDbTools($page) {
         Start-Process powershell.exe -ArgumentList "-NoExit -NoProfile -Command `"cd '$dir'; Write-Host 'Running: dotnet ef database update' -ForegroundColor Cyan; dotnet ef database update`""
     }
 
-    $btnEfScript = New-Button 'Xuất SQL Script' 334 154 130 $gMig {
+    $btnEfScript = New-Button 'Xuất SQL Script' 334 188 130 $gMig {
         if (-not $lstMig.SelectedItems.Count -or -not $lstMig.SelectedItems[0].Tag) { return }
         $app = $lstMig.SelectedItems[0].Tag
         $dir = [string]$app.dir
@@ -96,7 +106,7 @@ function Build-TabDbTools($page) {
     # ══════════════════════════════════════════════════════════════════════
     # NHÓM 2 — Seed Data & Reset DB
     # ══════════════════════════════════════════════════════════════════════
-    $gSeed = New-Group 'Dữ liệu Thử nghiệm (Seed & Reset)' 224 110 $page
+    $gSeed = New-Group 'Dữ liệu Thử nghiệm (Seed & Reset)' 250 110 $page
 
     $lblSeedNote = New-Object System.Windows.Forms.Label
     $lblSeedNote.Text      = 'Chỉ dùng cho môi trường LOCAL — không dùng trên staging/production.'
@@ -120,6 +130,7 @@ function Build-TabDbTools($page) {
             [System.Windows.Forms.MessageBox]::Show('✅ Database Local đã được reset.', 'DB Helper') | Out-Null
         }
     }
+    $btnResetDb.Tag = 'danger'
 
     $btnCheckMig = New-Button 'Kiểm tra Pending' 334 46 140 $gSeed {
         if (-not $lstMig.SelectedItems.Count -or -not $lstMig.SelectedItems[0].Tag) {
@@ -135,12 +146,12 @@ function Build-TabDbTools($page) {
     # ══════════════════════════════════════════════════════════════════════
     # NHÓM 3 — Connection Strings
     # ══════════════════════════════════════════════════════════════════════
-    $gConn = New-Group 'Connection Strings — Copy nhanh' 342 160 $page
+    $gConn = New-Group 'Connection Strings — Copy nhanh' 372 160 $page
 
     $lblConnNote = New-Object System.Windows.Forms.Label
     $lblConnNote.Text      = 'Nhấn nút để sao chép vào clipboard:'
     $lblConnNote.Location  = New-Object System.Drawing.Point(12, 24)
-    $lblConnNote.Size      = New-Object System.Drawing.Size(200, 18)
+    $lblConnNote.Size      = New-Object System.Drawing.Size(486, 22)
     $lblConnNote.ForeColor = $Theme.Muted
     $gConn.Controls.Add($lblConnNote)
 
@@ -216,7 +227,7 @@ function Build-TabDbTools($page) {
     # ══════════════════════════════════════════════════════════════════════
     # NHÓM 4 — Mở công cụ bên ngoài
     # ══════════════════════════════════════════════════════════════════════
-    $gTools = New-Group 'Mở Công cụ Ngoài' 510 80 $page
+    $gTools = New-Group 'Mở Công cụ Ngoài' 544 80 $page
 
     $externalTools = @(
         @{ Label = 'pgAdmin'; X = 12;  Cmd = { Start-Process 'pgadmin4' } },
@@ -231,4 +242,23 @@ function Build-TabDbTools($page) {
             try { & $capturedEt.Cmd } catch { Set-Status "Không mở được $($capturedEt.Label)" }
         }
     }
+    $page.Tag = @{ Migration = $gMig; Seed = $gSeed; Connections = $gConn; Tools = $gTools; Info = $lblMigInfo; List = $lstMig }
+    $page.Add_Resize({ param($s, $e) Set-DbToolsLayout $s })
+    Set-DbToolsLayout $page
+}
+
+function Set-DbToolsLayout($page) {
+    if (-not $page.Tag) { return }
+    $st = $page.Tag; $width = [math]::Max(510, [math]::Min(760, ($page.ClientSize.Width - 24)))
+    $offset = $page.AutoScrollPosition.Y
+    foreach ($group in @($st.Migration, $st.Seed, $st.Connections, $st.Tools)) { $group.Width = $width }
+    $st.Migration.Top = 6 + $offset; $st.Seed.Top = 250 + $offset
+    $st.Connections.Top = 372 + $offset; $st.Tools.Top = 544 + $offset
+    $st.Info.Width = $width - 24; $st.List.Width = $width - 24
+    $st.List.Columns[0].Width = [int](($width - 24) * 0.4)
+    $st.List.Columns[1].Width = 90; $st.List.Columns[2].Width = [math]::Max(120, ($width - $st.List.Columns[0].Width - 118))
+    foreach ($group in @($st.Migration, $st.Tools)) { [void](Set-ButtonRow $group $(if ($group -eq $st.Migration) { 188 } else { 30 }) 12 8) }
+    [void](Set-ButtonRow $st.Seed 46 12 8)
+    foreach ($top in 46, 86) { [void](Set-ButtonRow $st.Connections $top 12 8) }
+    $page.AutoScrollMinSize = New-Object System.Drawing.Size(0, 638)
 }

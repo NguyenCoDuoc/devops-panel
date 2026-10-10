@@ -3,6 +3,31 @@
 # Folder picker: nút duyệt thư mục + danh sách gần đây
 # Gọi Install-AiSidebar sau khi layout AI tab đã được dựng xong trong PegasusPanel.ps1
 
+function Get-AiContextLayout([int]$width, [int]$height, [string]$dir, $info) {
+    $segments = @(); $link = $null; $available = [math]::Max(0, $width - 24)
+    if ($info -and $info.Repo) {
+        $label = if ($width -lt 520) { 'Diff / Commit ›' } else { 'Xem thay đổi / Commit ›' }
+        $linkWidth = [System.Windows.Forms.TextRenderer]::MeasureText($label, $AiSmall).Width + 4
+        $linkWidth = [math]::Min($linkWidth, [int]($available / 2))
+        $link = @{ Text = $label; Bounds = New-Object System.Drawing.Rectangle(($width - $linkWidth - 12), 0, $linkWidth, $height) }
+        $available = [math]::Max(0, $available - $linkWidth - 12)
+    }
+    $folder = if ($dir) { Split-Path $dir -Leaf } else { 'Chưa chọn thư mục' }
+    $folderWidth = if ($link) { [int]($available * 0.33) } else { [int]($available * 0.6) }
+    $segments += @{ Text = $folder; Color = 'Text'; Icon = 'E8B7'; Bounds = New-Object System.Drawing.Rectangle(12, 0, $folderWidth, $height) }
+    $x = 12 + $folderWidth + 8
+    if ($link) {
+        $status = if ($info.Add -or $info.Del -or $info.New) { "+$($info.Add) −$($info.Del) · $($info.New) mới" } else { 'Không đổi' }
+        $statusWidth = [math]::Min(100, [int]($available * 0.25))
+        $branchWidth = [math]::Max(0, $available - $folderWidth - $statusWidth - 16)
+        $segments += @{ Text = $info.Branch; Color = 'Text'; Icon = 'F003'; Bounds = New-Object System.Drawing.Rectangle($x, 0, $branchWidth, $height) }
+        $segments += @{ Text = $status; Color = 'Muted'; Icon = ''; Bounds = New-Object System.Drawing.Rectangle(($x + $branchWidth + 8), 0, $statusWidth, $height) }
+    } elseif ($info) {
+        $segments += @{ Text = 'Không phải Git repo'; Color = 'Muted'; Icon = ''; Bounds = New-Object System.Drawing.Rectangle($x, 0, ([math]::Max(0, $available - $folderWidth - 8)), $height) }
+    }
+    @{ Segments = $segments; Link = $link }
+}
+
 function Install-AiSidebar {
     # ── Kích thước sidebar ──────────────────────────────────────────────────
     $SideW  = 200
@@ -56,7 +81,12 @@ function Install-AiSidebar {
     $btnSideNew.BackColor   = [System.Drawing.Color]::Transparent
     $btnSideNew.ForeColor   = $Theme.Accent
     $btnSideNew.Cursor      = 'Hand'
+    $btnSideNew.AccessibleName = 'Bắt đầu phiên mới'
     $tipDoc.SetToolTip($btnSideNew, 'Bắt đầu phiên mới')
+    if ($IconFontName) {
+        $btnSideNew.Image = Get-IconBitmap 'E710' $Theme.Accent 14; $btnSideNew.Text = ''
+        [void]$script:iconTargets.Add(@{ Obj = $btnSideNew; Code = 'E710'; Color = 'Accent' })
+    }
     $btnSideNew.Add_Click({
         $script:ai.Session = $null; $script:ai.Key = ''; $script:ai.Title = $null
         Clear-AiChat; Show-AiWelcome; Update-AiUi
