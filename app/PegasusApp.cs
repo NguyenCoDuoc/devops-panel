@@ -14,8 +14,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("Develop Workspace")]
 [assembly: AssemblyCompany("Develop Workspace")]
 [assembly: AssemblyDescription("Bảng điều khiển Ubuntu (WSL), PostgreSQL, Docker, K3s, sức khỏe máy")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
+[assembly: AssemblyVersion("1.0.8.0")]
+[assembly: AssemblyFileVersion("1.0.8.0")]
 
 static class Program
 {
