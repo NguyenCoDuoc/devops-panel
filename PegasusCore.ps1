@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.9'
+$PanelVersion = '1.0.10'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -601,7 +601,8 @@ function Update-AppsCatalog([string[]]$roots) {
     $removedDirs = @($cfg.Removed | Where-Object dir | ForEach-Object { $_.dir.TrimEnd('\').ToLower() })    # app người dùng đã gỡ
     $inRoots = { param($d) foreach ($r in $roots) { if ($d.ToLower().StartsWith($r.ToLower() + '\')) { return $true } }; $false }
 
-    $keep = @($cfg.Apps | Where-Object { $_.manual -or -not $_.dir -or -not (& $inRoots $_.dir) })
+    $keep = @($cfg.Apps | Where-Object { $_.manual -or $_.iis -or -not $_.dir -or -not (& $inRoots $_.dir) })
+    $removedDirs += @($cfg.Apps | Where-Object { $_.iis -and $_.dir } | ForEach-Object { $_.dir.TrimEnd('\').ToLower() })    # project đã chạy bằng IIS: không thêm bản dotnet run trùng
     $taken = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($a in $keep) { [void]$taken.Add($a.id) }
 
@@ -643,6 +644,130 @@ function Get-ListeningPorts {
     }
 }
 
+# ---------- Site IIS (project MVC chạy trên IIS) ----------
+# App trong apps.json có thêm "iis": "<tên site>". Cổng do http.sys (System, PID 4) giữ, code chạy trong w3wp
+# (user thường không đọc được tiến trình / log của w3wp) -> trạng thái = cổng đang nghe bởi System + phản hồi HTTP.
+# Start / Stop / Recycle dùng appcmd, cần quyền Administrator (hộp UAC).
+$IisConfigFile = "$env:windir\System32\inetsrv\config\applicationHost.config"
+$AppCmd = "$env:windir\System32\inetsrv\appcmd.exe"
+$script:iisCache = $null; $script:iisCacheTime = [datetime]::MinValue
+function Get-IisSites {
+    if (-not (Test-Path $IisConfigFile)) { return @() }
+    $t = (Get-Item $IisConfigFile).LastWriteTimeUtc
+    if ($script:iisCache -and $t -eq $script:iisCacheTime) { return $script:iisCache }
+    try { [xml]$x = [IO.File]::ReadAllText($IisConfigFile) } catch { return @() }
+    $sites = foreach ($s in @($x.configuration.'system.applicationHost'.sites.site)) {
+        $root = @($s.application) | Where-Object { $_.path -eq '/' } | Select-Object -First 1
+        $vd = @($root.virtualDirectory) | Where-Object { $_.path -eq '/' } | Select-Object -First 1
+        $binds = @(foreach ($b in @($s.bindings.binding)) {
+            if ($b.protocol -notin 'http', 'https') { continue }
+            $p = ([string]$b.bindingInformation) -split ':'          # IP:port:host
+            if ($p.Count -ge 2 -and $p[1] -match '^\d+$') { [pscustomobject]@{ Protocol = $b.protocol; Port = [int]$p[1]; Host = $(if ($p.Count -ge 3) { $p[2] } else { '' }) } }
+        })
+        # Binding chính: ưu tiên https (site có cả http + https như SH.KPI :9193 / :2008 thì dùng :2008), không gắn host hoặc host localhost
+        $main = @($binds | Where-Object { -not $_.Host -or $_.Host -eq 'localhost' } | Sort-Object @{ e = { $_.Protocol -ne 'https' } }) + @($binds) | Select-Object -First 1
+        [pscustomobject]@{
+            Name = [string]$s.name; Id = [int]$s.id; Pool = [string]$root.applicationPool
+            Path = [Environment]::ExpandEnvironmentVariables([string]$vd.physicalPath)
+            Bindings = $binds; Port = $(if ($main) { $main.Port } else { 0 })
+            Url = $(if ($main) { "$($main.Protocol)://localhost:$($main.Port)" } else { '' })
+        }
+    }
+    $script:iisCache = @($sites); $script:iisCacheTime = $t
+    $script:iisCache
+}
+# Cổng IIS luôn do System (PID 4, http.sys) giữ; PID thật của site là w3wp của app pool.
+# netsh http (không cần Admin) liệt kê từng request queue = tên app pool kèm PID tiến trình đang gắn vào. Pool rảnh chưa có w3wp -> không có PID.
+function Get-IisWorkerPids {
+    $map = @{}; $q = $null; $inProc = $false
+    foreach ($l in (netsh.exe http show servicestate view=requestq 2>$null)) {
+        if ($l -match '^Request queue name:\s*(.+?)\s*$') { $q = $Matches[1]; $inProc = $false; if (-not $map.ContainsKey($q)) { $map[$q] = New-Object System.Collections.ArrayList }; continue }
+        if (-not $q) { continue }
+        if ($l -match '^\s+Processes:\s*$') { $inProc = $true; continue }
+        if ($inProc -and $l -match '^\s+ID:\s*(\d+)') { [void]$map[$q].Add([int]$Matches[1]); continue }
+        if ($inProc -and $l -notmatch '^\s+ID:') { $inProc = $false }
+    }
+    $map
+}
+function Get-IisSite([string]$name) {
+    $s = Get-IisSites | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+    if (-not $s) { throw "IIS không có site '$name'" }
+    $s
+}
+# Chạy appcmd bằng quyền Admin (hiện UAC). Tên site / pool lấy từ cấu hình IIS (không lấy từ input) nên an toàn khi ghép lệnh.
+# $action: start | stop | restart (= chạy site + recycle app pool, nạp lại code mới build). Nhiều site -> một lần UAC.
+function Invoke-IisAdmin([string[]]$sites, [ValidateSet('start', 'stop', 'restart')][string]$action) {
+    $q = { param($v) "'" + ($v -replace "'", "''") + "'" }
+    $cmds = foreach ($site in $sites) {
+        $s = Get-IisSite $site
+        $pool = "& '$AppCmd' {0} apppool /apppool.name:$(& $q $s.Pool)"; $st = "& '$AppCmd' {0} site /site.name:$(& $q $s.Name)"
+        $list = switch ($action) {
+            'start'   { @(($pool -f 'start'), ($st -f 'start')) }
+            'stop'    { @(($st -f 'stop'), ($pool -f 'stop')) }          # dừng cả pool: w3wp nhả DLL để build lại
+            'restart' { @(($pool -f 'start'), ($st -f 'start'), ($pool -f 'recycle')) }
+        }
+        if ($s.Pool) { $list } else { $list | Where-Object { $_ -notmatch ' apppool ' } }
+    }
+    $script = ($cmds | ForEach-Object { "$_ 2>&1 | Out-Null" }) -join '; '
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    try { Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList "-NoProfile -EncodedCommand $enc" -ErrorAction Stop }
+    catch { throw 'Đã huỷ - thao tác IIS cần quyền Administrator (bấm Yes ở hộp UAC)' }
+}
+# Start / Stop / Restart nhiều app IIS trong danh mục bằng một lần UAC; trả về từng dòng kết quả
+function Invoke-DevAppsIis([string[]]$ids, [string]$act) {
+    $apps = @((Get-AppsConfig).Apps | Where-Object { $ids -contains $_.id -and $_.iis })
+    if (-not $apps.Count) { return @() }
+    $action = @{ start = 'start'; startseq = 'start'; stop = 'stop'; restart = 'restart' }[$act]
+    Invoke-IisAdmin @($apps.iis) $action
+    $want = $action -ne 'stop'
+    for ($i = 0; $i -lt 12; $i++) {
+        $cur = @(Get-DevApps | Where-Object { $ids -contains $_.Id -and $_.Iis })
+        if (-not @($cur | Where-Object { [bool]$_.Running -ne $want }).Count) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    foreach ($a in $apps) {
+        $c = $cur | Where-Object Id -eq $a.id
+        if ([bool]$c.Running -eq $want) {
+            $m = "$(@{ start = 'Đã chạy'; stop = 'Đã dừng'; restart = 'Đã recycle' }[$action]) site IIS $($a.iis) (port $($a.port))"
+            if ($want) {      # gọi thử 1 lần cho app pool nạp xong (lần đầu sau recycle mất 10-15 giây), mở web sau đó không phải chờ
+                $h = Test-DevAppHttp $c 60000
+                $m += if ($h.Code) { " · sẵn sàng sau $([math]::Round($h.Ms / 1000, 1))s (HTTP $($h.Code))" } else { ' · chưa phản hồi HTTP sau 60s - xem log' }
+            }
+            $m
+        }
+        elseif ($want) { "✗ $($a.id): cổng $($a.port) chưa nghe sau khi chạy site IIS $($a.iis) - mở IIS Manager kiểm tra binding / app pool" }
+        else { "✗ $($a.id): cổng $($a.port) vẫn đang nghe sau khi dừng site IIS $($a.iis) (site khác dùng chung cổng?)" }
+    }
+}
+
+# Lỗi gần đây của site trong Windows Event Log (ASP.NET / IIS ghi vào log Application, kèm /LM/W3SVC/<id>/)
+function Get-IisSiteLog([string]$site, [int]$max = 40) {
+    $s = Get-IisSite $site
+    $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 1, 2, 3; StartTime = (Get-Date).AddDays(-7) } -MaxEvents 3000 -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProviderName -match 'ASP\.NET|IIS|W3SVC|WAS|\.NET Runtime|Application Error' -and ($_.Message -match "W3SVC/$($s.Id)/" -or ($s.Path -and $_.Message.IndexOf($s.Path, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($s.Pool -and $_.Message -match [regex]::Escape($s.Pool))) } |
+        Select-Object -First $max)
+    $head = "Site IIS: $($s.Name) · pool $($s.Pool) · $($s.Url)`nThư mục: $($s.Path)`n" +
+            "Log truy cập của IIS chỉ Administrator đọc được; dưới đây là lỗi / cảnh báo trong Windows Event Log (7 ngày gần nhất).`n"
+    if (-not $events.Count) { return $head + "`n(Không có lỗi nào được ghi cho site này.)" }
+    $head + "`n" + (($events | ForEach-Object { "==== $($_.TimeCreated.ToString('dd/MM HH:mm:ss'))  [$($_.LevelDisplayName)] $($_.ProviderName) #$($_.Id)`n$(($_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 25) -join "`n")" }) -join "`n`n")
+}
+# Thêm site IIS vào danh mục app (id iis-<tên>, group IIS); site đã có thì cập nhật cổng / url / thư mục
+function Add-IisApps([string[]]$names) {
+    $cfg = Get-AppsConfig
+    $apps = New-Object System.Collections.ArrayList; foreach ($a in $cfg.Apps) { [void]$apps.Add($a) }
+    $added = 0; $updated = 0
+    foreach ($n in $names) {
+        $s = Get-IisSite $n
+        $id = 'iis-' + (($s.Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-'))
+        $obj = [pscustomobject]@{ id = $id; group = 'IIS'; name = $s.Name; type = 'backend'; iis = $s.Name; port = $s.Port; url = $s.Url; dir = $s.Path; start = '' }
+        $old = $apps | Where-Object { $_.id -eq $id } | Select-Object -First 1
+        if ($old) { $apps[$apps.IndexOf($old)] = $obj; $updated++ } else { [void]$apps.Add($obj); $added++ }
+    }
+    $ids = @($apps | ForEach-Object { $_.id })
+    Save-AppsConfig $cfg.Ranges $apps.ToArray() @($cfg.Removed | Where-Object { $ids -notcontains $_.id })      # thêm lại site đã gỡ -> bỏ khỏi danh sách đã gỡ
+    "Đã thêm $added site IIS" + $(if ($updated) { ", cập nhật $updated site" } else { '' })
+}
+
 function Get-DevApps {
     $cfg = Get-AppsConfig
     $catPorts = @($cfg.Apps | Where-Object { $_.port } | ForEach-Object { [int]$_.port })
@@ -666,7 +791,23 @@ function Get-DevApps {
     }
 
     $claimed = @{}
+    $iisWorkers = if (@($cfg.Apps | Where-Object iis).Count) { Get-IisWorkerPids } else { @{} }
     $rows = foreach ($a in $cfg.Apps) {
+        if ($a.iis) {          # site IIS: chạy = cổng đang nghe bởi http.sys (System); tiến trình khác giữ cổng = bị chiếm
+            $p = if ($a.port) { $byPort[[int]$a.port] } else { $null }
+            $sys = $p -and [int]$p.ProcessId -le 4
+            if ($p) { $claimed[[int]$a.port] = $true }
+            $pool = (Get-IisSites | Where-Object Name -eq $a.iis | Select-Object -First 1).Pool
+            $w = if ($sys -and $pool -and $iisWorkers.ContainsKey($pool)) { @($iisWorkers[$pool]) } else { @() }
+            [pscustomobject]@{
+                Id = $a.id; Group = $a.group; Name = $a.name; Type = $a.type; Port = [int]$a.port; Url = $a.url; Dir = $a.dir; Iis = [string]$a.iis; Pool = $pool
+                Known = $true; Running = [bool]$sys; Busy = [bool]($p -and -not $sys); BusyPid = $(if ($p -and -not $sys) { [int]$p.ProcessId } else { 0 })
+                AutoRestart = $false
+                Pid = $(if ($w.Count) { [int]$w[0] } else { 0 })          # w3wp của app pool; 0 = pool đang rảnh (chưa có request)
+                Process = $(if ($w.Count) { 'w3wp' } else { 'IIS (pool rảnh)' })
+            }
+            continue
+        }
         if (-not $a.port) {
             $tp = $toolProcs | Where-Object { $_.ExecutablePath -like "$($a.dir)\*" } | Select-Object -First 1
             [pscustomobject]@{
@@ -719,6 +860,12 @@ function Get-DevApps {
 if (-not $global:DevAppCpuPrev) { $global:DevAppCpuPrev = @{} }
 function Add-DevAppStats($rows, [switch]$NoHealth) {
     $running = @($rows | Where-Object { $_.Running -and $_.Pid })
+    if (-not $NoHealth) {        # site IIS có app pool đang rảnh (chưa có w3wp, không có PID) -> vẫn đo phản hồi HTTP
+        foreach ($r in @($rows | Where-Object { $_.Running -and $_.Iis -and $_.Port -and -not $_.Pid })) {
+            $h = Test-DevAppHttp $r
+            $r | Add-Member HealthMs $h.Ms -Force; $r | Add-Member HealthCode $h.Code -Force; $r | Add-Member HealthOk $h.Ok -Force
+        }
+    }
     if (-not $running.Count) { return }
     $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, WorkingSetSize, KernelModeTime, UserModeTime)
     $byPid = @{}; $children = @{}
@@ -826,7 +973,7 @@ function Start-DevAppsOrdered([string[]]$ids, [int]$phaseTimeoutSec = 180) {
             $cur = if ($ph -contains 'tool') { @() } else { @(Get-DevApps) }
             foreach ($a in @($wait)) {
                 $pidFile = Join-Path $AppsLogDir "$($a.id).pid"
-                $alive = (Test-Path $pidFile) -and [bool](Get-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -ErrorAction SilentlyContinue)
+                $alive = $a.iis -or ((Test-Path $pidFile) -and [bool](Get-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -ErrorAction SilentlyContinue))      # IIS không có pid file
                 if ($ph -contains 'tool') { if (-not $alive) { $wait.Remove($a) }; continue }       # tool: chờ chạy xong
                 if (($cur | Where-Object Id -eq $a.id).Running) { $wait.Remove($a) }
                 elseif (-not $alive) { [void]$msgs.Add("✗ $($a.id): tiến trình đã thoát trước khi nghe port - xem log"); $wait.Remove($a) }
@@ -904,6 +1051,7 @@ function Stop-DevApp([string]$id) {
     if ($id -notmatch '^[a-z0-9-]+$') { throw 'id không hợp lệ' }
     $a = Get-DevApps | Where-Object Id -eq $id | Select-Object -First 1
     if (-not $a) { throw "Không có app $id" }
+    if ($a.Iis) { $m = [string](@(Invoke-DevAppsIis @($id) 'stop')[0]); if ($m -like '✗*') { throw ($m -replace '^✗ [^:]+: ', '') }; return $m }
     # 1) Tiến trình gốc (cmd /c ...) TRƯỚC: nếu giết tiến trình nghe port trước, cmd chạy tiếp lệnh sau
     #    (vd "(vite preview & npm run build:watch)" -> build:watch mọc ra sau khi taskkill đã liệt kê cây, bị sót,
     #    giữ file log + dist -> lần Start sau báo "being used by another process").
@@ -939,6 +1087,7 @@ function Start-DevApp([string]$id) {
     $cur = Get-DevApps | Where-Object Id -eq $id
     if ($cur.Running) { return "$($a.name) đang chạy rồi" }
     if ($cur.Busy) { throw "Port $($a.port) đang bị $($cur.Process) chiếm" }
+    if ($a.iis) { $m = [string](@(Invoke-DevAppsIis @($id) 'start')[0]); if ($m -like '✗*') { throw ($m -replace '^✗ [^:]+: ', '') }; return $m }
     $portText = if ($a.port) { "port $($a.port)" } else { 'tool' }
     New-Item -ItemType Directory -Force $AppsLogDir | Out-Null
     $log = Join-Path $AppsLogDir "$id.log"
@@ -951,6 +1100,8 @@ function Start-DevApp([string]$id) {
 
 function Get-DevAppLog([string]$id, [int]$tail = 200) {
     if ($id -notmatch '^[a-z0-9-]+$') { throw 'id không hợp lệ' }
+    $iisApp = (Get-AppsConfig).Apps | Where-Object { $_.id -eq $id -and $_.iis } | Select-Object -First 1
+    if ($iisApp) { return (Get-IisSiteLog $iisApp.iis) }
     $log = Join-Path $AppsLogDir "$id.log"
     if (-not (Test-Path $log)) { return '(Chưa có log - app này chưa được khởi động từ panel)' }
     (Get-Content $log -Tail ([math]::Min([math]::Max($tail, 10), 2000)) -Encoding UTF8) -join "`n"

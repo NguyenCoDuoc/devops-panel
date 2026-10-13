@@ -1484,13 +1484,19 @@ function Invoke-AppsBatch([string]$act, $apps) {
         $ErrorActionPreference = 'SilentlyContinue'     # taskkill 2>&1 khi EAP=Stop bị coi là lỗi; lỗi thật vẫn throw
         $msgs = New-Object System.Collections.ArrayList
         if ($p.Act -eq 'startseq') { , @(Start-DevAppsOrdered $p.Ids); return }   # tool -> backend -> BFF -> frontend
+        # Site IIS: gom lại một lần UAC (restart = recycle app pool)
+        $iisIds = @((Get-AppsConfig).Apps | Where-Object { $p.Ids -contains $_.id -and $_.iis } | ForEach-Object { $_.id })
+        $ids = @($p.Ids | Where-Object { $iisIds -notcontains $_ })
+        $iisMsgs = @()
+        if ($iisIds.Count) { try { $iisMsgs = @(Invoke-DevAppsIis $iisIds $p.Act) } catch { $iisMsgs = @("✗ IIS: $($_.Exception.Message)") } }
         if ($p.Act -ne 'start') {
-            foreach ($id in $p.Ids) { try { [void]$msgs.Add([string](Stop-DevApp $id)) } catch { [void]$msgs.Add("✗ ${id}: $($_.Exception.Message)") } }
+            foreach ($id in $ids) { try { [void]$msgs.Add([string](Stop-DevApp $id)) } catch { [void]$msgs.Add("✗ ${id}: $($_.Exception.Message)") } }
         }
-        if ($p.Act -eq 'restart') { Start-Sleep 2; $msgs.Clear() }
+        if ($p.Act -eq 'restart' -and $ids.Count) { Start-Sleep 2; $msgs.Clear() }
         if ($p.Act -ne 'stop') {
-            foreach ($id in $p.Ids) { try { [void]$msgs.Add([string](Start-DevApp $id)) } catch { [void]$msgs.Add("✗ ${id}: $($_.Exception.Message)") } }
+            foreach ($id in $ids) { try { [void]$msgs.Add([string](Start-DevApp $id)) } catch { [void]$msgs.Add("✗ ${id}: $($_.Exception.Message)") } }
         }
+        foreach ($m in $iisMsgs) { [void]$msgs.Add([string]$m) }
         , $msgs.ToArray()
     }.ToString()
     Start-CoreAsync $code @{ Ids = @($apps.Id); Act = $act } {
@@ -1591,8 +1597,68 @@ function Open-AppWeb($apps) {
     if (-not $urls.Count) { Set-Status 'App đã chọn không có địa chỉ web.'; return }
     foreach ($u in $urls) { Start-Process $u }
 }
+# Site IIS không có file log của panel -> cửa sổ hiện lỗi ASP.NET / IIS trong Windows Event Log (đọc ở nền)
+function Show-IisLogWindow($a) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "Log IIS - $($a.Name)"; $d.Icon = $AppIcon; $d.Font = $font; $d.StartPosition = 'CenterParent'
+    $d.Size = New-Object System.Drawing.Size(980, 620)
+    $rtb = New-RtbView; $rtb.WordWrap = $true; $rtb.Text = 'Đang đọc Windows Event Log…'
+    $btns = New-Object System.Windows.Forms.FlowLayoutPanel; $btns.Dock = 'Bottom'; $btns.AutoSize = $true; $btns.FlowDirection = 'RightToLeft'; $btns.Padding = New-Object System.Windows.Forms.Padding(6)
+    $st = @{ Form = $d; Rtb = $rtb; Id = $a.Id }
+    $d.Tag = $st
+    $st.Load = {
+        param($st)
+        $st.Rtb.Text = 'Đang đọc Windows Event Log…'
+        Start-CoreAsync 'Get-DevAppLog $p.Id' @{ Id = $st.Id } { param($r, $ctx) if (-not $ctx.St.Form.IsDisposed) { $ctx.St.Rtb.Text = if ($r.Ok) { [string]$r.Value } else { "Lỗi: $($r.Value)" } } } @{ St = $st }
+    }
+    New-ToolButton 'Đóng' $btns { param($sender, $e) $sender.FindForm().Close() } | Out-Null
+    New-ToolButton 'Làm mới' $btns { param($sender, $e) $st = $sender.FindForm().Tag; & $st.Load $st } | Out-Null
+    New-ToolButton 'Mở Event Viewer' $btns { param($sender, $e) Start-Process eventvwr.msc } | Out-Null
+    $d.Controls.Add($rtb); $d.Controls.Add($btns); $rtb.BringToFront()
+    Set-ControlTheme $d $Theme $Theme; Add-IconsTo $d
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender; $st = $sender.Tag; & $st.Load $st })
+    $d.Show($form)
+}
+# Thêm site IIS vào danh mục: hộp tick chọn site (đọc applicationHost.config, không cần Admin)
+function Show-AddIisDialog {
+    $sites = @(Get-IisSites | Where-Object { $_.Port } | Sort-Object Name)
+    if (-not $sites.Count) { [System.Windows.Forms.MessageBox]::Show('Máy này chưa cài IIS hoặc không có site nào có binding http / https.', 'Thêm site IIS', 'OK', 'Information') | Out-Null; return }
+    $have = @((Get-AppsConfig).Apps | Where-Object iis | ForEach-Object { $_.iis })
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Thêm site IIS vào panel'; $d.Icon = $AppIcon; $d.Font = $font; $d.StartPosition = 'CenterParent'
+    $d.Size = New-Object System.Drawing.Size(860, 560); $d.MinimizeBox = $false; $d.MaximizeBox = $false
+    $note = New-Object System.Windows.Forms.Label; $note.Dock = 'Top'; $note.Height = 58; $note.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 0)
+    $note.Text = "Tick site muốn theo dõi trong tab Ứng dụng (nhóm IIS). Panel xem trạng thái qua cổng + phản hồi HTTP;`nStart / Stop / Restart (recycle app pool) cần bấm Yes ở hộp UAC. Site đã thêm được tick sẵn - bỏ tick không gỡ site đó."
+    $list = New-Object System.Windows.Forms.CheckedListBox; $list.Dock = 'Fill'; $list.CheckOnClick = $true; $list.IntegralHeight = $false; $list.BorderStyle = 'None'
+    $list.Font = $MonoFont
+    $w = [math]::Max(8, (@($sites.Name | ForEach-Object Length) | Measure-Object -Maximum).Maximum)
+    foreach ($s in $sites) {
+        $b = (@($s.Bindings | ForEach-Object { "$($_.Protocol) :$($_.Port)" + $(if ($_.Host) { " $($_.Host)" } else { '' }) }) -join ', ')
+        [void]$list.Items.Add(("{0,-$w}  {1,-26}  {2}" -f $s.Name, $b, $s.Path), ($have -contains $s.Name))
+    }
+    $btns = New-Object System.Windows.Forms.FlowLayoutPanel; $btns.Dock = 'Bottom'; $btns.AutoSize = $true; $btns.FlowDirection = 'RightToLeft'; $btns.Padding = New-Object System.Windows.Forms.Padding(6)
+    $d.Tag = @{ List = $list; Sites = $sites; Have = $have }
+    New-ToolButton 'Huỷ' $btns { param($sender, $e) $sender.FindForm().Close() } | Out-Null
+    $ok = New-ToolButton 'Thêm vào panel' $btns {
+        param($sender, $e)
+        $f = $sender.FindForm(); $ctx = $f.Tag
+        $pick = @(foreach ($i in $ctx.List.CheckedIndices) { $ctx.Sites[$i].Name })
+        if (-not $pick.Count) { $f.Close(); return }
+        try { Set-Status (Add-IisApps $pick); $appsSync.Kick = $true } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Thêm site IIS', 'OK', 'Warning') | Out-Null; return }
+        $f.Close()
+    }
+    $ok.Tag = 'primary'; $ok.Font = New-Object System.Drawing.Font($font, [System.Drawing.FontStyle]::Bold)
+    New-ToolButton 'Mở IIS Manager' $btns { param($sender, $e) Start-Process "$env:windir\System32\inetsrv\InetMgr.exe" } | Out-Null
+    $d.Controls.Add($list); $d.Controls.Add($note); $d.Controls.Add($btns); $list.BringToFront()
+    $d.AcceptButton = $ok
+    Set-ControlTheme $d $Theme $Theme; Add-IconsTo $d
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender })
+    [void]$d.ShowDialog($form)
+}
 function Open-AppLog($apps) {
     $miss = @()
+    foreach ($a in @($apps | Where-Object Iis)) { Show-IisLogWindow $a }
+    $apps = @($apps | Where-Object { -not $_.Iis })
     foreach ($a in $apps) {
         $log = Join-Path $AppsLogDir "$($a.Id).log"
         if (-not (Test-Path $log)) { $miss += $a.Name; continue }
@@ -1871,6 +1937,9 @@ $miAppFreePort = $appsMenu.Items.Add('Giải phóng port', $null, {
     try { Set-Status (Stop-PortOwner $a.Port) } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Giải phóng port', 'OK', 'Warning') | Out-Null }
     $appsSync.Kick = $true
 })
+$miIisRecycle = $appsMenu.Items.Add('Recycle app pool (nạp lại code sau khi build)', $null, { Invoke-AppsBatch 'restart' @(Get-SelectedApps | Where-Object Iis) })
+$miIisMgr = $appsMenu.Items.Add('Mở IIS Manager', $null, { Start-Process "$env:windir\System32\inetsrv\InetMgr.exe" })
+$miIisAdd = $appsMenu.Items.Add('Thêm site IIS…', $null, { Show-AddIisDialog })
 $miAppProfiles = New-Object System.Windows.Forms.ToolStripMenuItem('Bộ app')
 [void]$appsMenu.Items.Add($miAppProfiles)
 $miAppGit = $appsMenu.Items.Add('Mở trong tab Git (nhánh, log, merge request)', $null, { $a = @(Get-SelectedApps)[0]; if ($a) { Show-GitTabFor $a } })
@@ -1938,7 +2007,12 @@ $appsMenu.Add_Opening({
     $miAppRemove.Enabled = [bool]$nKnown -and -not $script:appsBatchBusy
     $nRemoved = @((Get-AppsConfig).Removed).Count
     $miAppRestore.Text = "Khôi phục app đã gỡ ($nRemoved)…"; $miAppRestore.Enabled = [bool]$nRemoved
-    $kn = @($sel | Where-Object Known)
+    $kn = @($sel | Where-Object { $_.Known -and -not $_.Iis })       # site IIS: không tự khởi động lại (mỗi lần cần UAC)
+    $nIis = @($sel | Where-Object Iis).Count
+    $miIisRecycle.Visible = [bool]$nIis; $miIisMgr.Visible = [bool]$nIis
+    $miIisRecycle.Enabled = -not $script:appsBatchBusy
+    $miIisRecycle.Text = 'Recycle app pool' + $(if ($nIis -gt 1) { " ($nIis site)" } else { '' }) + ' - nạp lại code sau khi build'
+    $miIisAdd.Visible = Test-Path $IisConfigFile
     $miAppAuto.Enabled = [bool]$kn.Count
     $miAppAuto.Checked = $kn.Count -and (@($kn | Where-Object AutoRestart).Count -eq $kn.Count)
     $busy = if ($n -eq 1 -and $sel[0].Busy) { $sel[0] } else { $null }
