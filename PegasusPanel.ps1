@@ -273,7 +273,8 @@ $IconRules = @(
     @('Thoát', 'E711', 'Text'), @('Cài đặt', 'E713', 'Text'), @('Hiện mật khẩu', 'E8D7', 'Text'), @('Thêm', 'E710', 'Ok'), @('Lưu mục tiêu', 'E73E', 'Ok'), @('Sửa…', 'E70F', 'Text'), @('Để sang ngày mai', 'E72A', 'Text'), @('Kiểm tra cập nhật', 'E895', 'Text'), @('Cài bản mới', 'E896', 'Ok'), @('Xem trên GitHub', 'E8A7', 'Text'), @('Cập nhật', 'E896', 'Ok'),
     @('Gửi', 'E724', 'Text'), @('Dừng', 'E71A', 'Err'), @('Phiên mới', 'E710', 'Text'), @('Xem thay đổi', 'E890', 'Text'), @('Cài / cập nhật CLI', 'E896', 'Text'),
     @('Code với AI', 'E99A', 'Info'), @('Mở bằng AI', 'E99A', 'Info'),
-    @('Chạy Migration', 'E768', 'Ok'), @('Seed Data', 'E710', 'Info'), @('Reset Local DB', 'E74D', 'Warn')
+    @('Chạy Migration', 'E768', 'Ok'), @('Seed Data', 'E710', 'Info'), @('Reset Local DB', 'E74D', 'Warn'),
+    @('Bỏ thay đổi', 'E7A7', 'Warn'), @('Stash', 'E7B8', 'Text'), @('Lấy lại', 'E7A7', 'Text'), @('Mở file', 'E8E5', 'Text'), @('Mở thư mục', 'E838', 'Text')
 )
 $TabIcons = @{ 'Dịch vụ' = 'E9F5'; 'Ứng dụng' = 'E74C'; 'Git' = 'F003'; 'DB Helper' = 'E756'; 'Log Viewer' = 'E8A5'; 'Sức khỏe' = 'E95E'; 'K3s' = 'E7B8'; 'Cài đặt' = 'E713'; 'Trợ giúp' = 'E9CE'; 'AI Code' = 'E99A' }
 
@@ -2353,11 +2354,155 @@ function Invoke-ReposAction([string]$code, [hashtable]$params, [string]$title, $
     } @{ Title = $title; After = $after; AfterArg = $afterArg }
 }
 
+# Pull main cho nhiều repo: cửa sổ terminal hiện trực tiếp từng lệnh git (core đẩy dòng vào ConcurrentQueue, timer đọc ra)
+# Tab Git (giao diện mới) không còn danh sách nhiều repo -> hộp chọn repo có ô tick; repo ở production / hotfix bị khoá
+function Show-PullMainPicker {
+    if ($script:reposBusy) { Set-Status 'Git đang chạy lệnh khác, chờ chút.'; return }
+    $all = @($script:repos | Where-Object IsRepo | Sort-Object Name)
+    if (-not $all.Count) { Set-Status 'Chưa có repo nào - bấm "Quét repo" trước.'; if (-not $script:reposLoaded) { Load-Repos }; return }
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Pull main - chọn repo'; $d.Icon = $AppIcon; $d.Font = $font; $d.StartPosition = 'CenterParent'
+    $d.Size = New-Object System.Drawing.Size(620, 560); $d.MinimumSize = New-Object System.Drawing.Size(480, 360); $d.MinimizeBox = $false; $d.MaximizeBox = $false
+    $note = New-Object System.Windows.Forms.Label; $note.Dock = 'Top'; $note.Height = 74; $note.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 0)
+    $note.Text = "Lấy code main mới nhất về các repo được tick:`n• Đang ở main: pull fast-forward  • Nhánh khác: merge origin/main vào nhánh (chưa push), xung đột thì tự huỷ`n• Repo ở production / hotfix không chọn được; repo còn file đang sửa sẽ bị bỏ qua khi chạy"
+    $list = New-Object System.Windows.Forms.CheckedListBox; $list.Dock = 'Fill'; $list.CheckOnClick = $true; $list.IntegralHeight = $false; $list.BorderStyle = 'None'
+    $locked = New-Object System.Collections.Generic.HashSet[int]
+    for ($i = 0; $i -lt $all.Count; $i++) {
+        $r = $all[$i]
+        $isLocked = $r.Branch -eq 'production' -or $r.Branch -like 'hotfix/*'
+        $txt = "$($r.Name)   ·   $($r.Branch)" + $(if ($isLocked) { '   (bỏ qua: production / hotfix)' } elseif ($r.Dirty) { "   ·   $($r.Dirty) file đang sửa" } else { '' })
+        [void]$list.Items.Add($txt, -not $isLocked)
+        if ($isLocked) { [void]$locked.Add($i) }
+    }
+    $list.Tag = $locked
+    $list.Add_ItemCheck({ param($s, $e) if ($s.Tag.Contains($e.Index)) { $e.NewValue = 'Unchecked' } })
+    $btns = New-Object System.Windows.Forms.FlowLayoutPanel; $btns.Dock = 'Bottom'; $btns.AutoSize = $true; $btns.FlowDirection = 'RightToLeft'; $btns.Padding = New-Object System.Windows.Forms.Padding(6)
+    $ctx = @{ Form = $d; List = $list; Repos = $all }
+    $d.Tag = $ctx
+    New-ToolButton 'Huỷ' $btns { param($sender, $e) $sender.FindForm().Close() } | Out-Null
+    $run = New-ToolButton 'Chạy Pull main' $btns {
+        param($sender, $e)
+        $ctx = $sender.FindForm().Tag
+        $pick = @(foreach ($i in $ctx.List.CheckedIndices) { $ctx.Repos[$i] })
+        if (-not $pick.Count) { [System.Windows.Forms.MessageBox]::Show('Chưa tick repo nào.', 'Pull main', 'OK', 'Information') | Out-Null; return }
+        $ctx.Form.Close()
+        Start-ReposPullMain $pick
+    }
+    $run.Tag = 'primary'; $run.Font = New-Object System.Drawing.Font($font, [System.Drawing.FontStyle]::Bold)
+    New-ToolButton 'Bỏ chọn hết' $btns { param($sender, $e) $l = $sender.FindForm().Tag.List; for ($i = 0; $i -lt $l.Items.Count; $i++) { $l.SetItemChecked($i, $false) } } | Out-Null
+    New-ToolButton 'Chọn tất cả' $btns { param($sender, $e) $l = $sender.FindForm().Tag.List; for ($i = 0; $i -lt $l.Items.Count; $i++) { if (-not $l.Tag.Contains($i)) { $l.SetItemChecked($i, $true) } } } | Out-Null
+    $d.Controls.Add($list); $d.Controls.Add($note); $d.Controls.Add($btns); $list.BringToFront()
+    $d.AcceptButton = $run
+    Set-ControlTheme $d $Theme $Theme; Add-IconsTo $d
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender })
+    [void]$d.ShowDialog($form)
+}
+# $repos: các object repo (Root, Name, Branch) - từ hộp chọn repo hoặc repo đang mở trong cửa sổ Git
+function Start-ReposPullMain($repos, [switch]$Confirm) {
+    if ($script:reposBusy) { Set-Status 'Git đang chạy lệnh khác, chờ chút.'; return }
+    $s = @($repos | Where-Object { $_ -and $_.Root })
+    if (-not $s.Count) { Set-Status 'Chưa có repo nào.'; return }
+    if ($Confirm) {
+        $r = $s[0]
+        if ($r.Branch -eq 'production' -or $r.Branch -like 'hotfix/*') { [System.Windows.Forms.MessageBox]::Show("$($r.Name) đang ở nhánh $($r.Branch) - production / hotfix không nhận code main.", 'Pull main', 'OK', 'Information') | Out-Null; return }
+        $what = if ($r.Branch -eq 'main') { 'pull fast-forward nhánh main' } else { "merge origin/main vào nhánh $($r.Branch) (chưa push); xung đột thì tự huỷ merge" }
+        if ([System.Windows.Forms.MessageBox]::Show("Lấy code main mới nhất về $($r.Name):`n$what.`n`nTiếp tục?", 'Pull main', 'YesNo', 'Question') -ne 'Yes') { return }
+    }
+
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "Pull main - $($s.Count) repo"; $d.Icon = $AppIcon; $d.Font = $font; $d.StartPosition = 'CenterParent'
+    $d.Size = New-Object System.Drawing.Size(900, 560); $d.MinimumSize = New-Object System.Drawing.Size(560, 320)
+    $top = New-Object System.Windows.Forms.Panel; $top.Dock = 'Top'; $top.Height = 52; $top.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 6)
+    $lbl = New-Object System.Windows.Forms.Label; $lbl.Dock = 'Top'; $lbl.Height = 20; $lbl.AutoEllipsis = $true
+    $lbl.Font = New-Object System.Drawing.Font($font, [System.Drawing.FontStyle]::Bold)
+    $bar = New-Object System.Windows.Forms.ProgressBar; $bar.Dock = 'Bottom'; $bar.Height = 12; $bar.Maximum = $s.Count; $bar.Style = 'Continuous'
+    $top.Controls.Add($lbl); $top.Controls.Add($bar)
+    $con = New-Object System.Windows.Forms.RichTextBox
+    $con.Dock = 'Fill'; $con.ReadOnly = $true; $con.WordWrap = $false; $con.DetectUrls = $false; $con.BorderStyle = 'None'
+    $con.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27); $con.ForeColor = [System.Drawing.Color]::FromArgb(212, 212, 216)
+    $con.Font = New-Object System.Drawing.Font('Consolas', 10)
+    $btns = New-Object System.Windows.Forms.FlowLayoutPanel; $btns.Dock = 'Bottom'; $btns.AutoSize = $true; $btns.FlowDirection = 'RightToLeft'; $btns.Padding = New-Object System.Windows.Forms.Padding(6)
+    New-ToolButton 'Đóng' $btns { param($sender, $e) $sender.FindForm().Close() } | Out-Null
+    New-ToolButton 'Copy log' $btns { param($sender, $e) $t = $sender.FindForm().Tag.Con.Text; if ($t) { [System.Windows.Forms.Clipboard]::SetText($t); Set-Status 'Đã copy log Pull main.' } } | Out-Null
+    $d.Controls.Add($con); $d.Controls.Add($top); $d.Controls.Add($btns); $con.BringToFront()
+
+    $st = @{ Form = $d; Con = $con; Lbl = $lbl; Bar = $bar; Q = (New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'); Result = $null; Spin = 0; Cur = 'chuẩn bị'; Started = Get-Date; Ended = $false }
+    $d.Tag = $st
+    $st.Colors = @{
+        Cmd = [System.Drawing.Color]::FromArgb(103, 232, 249); Ok = [System.Drawing.Color]::FromArgb(74, 222, 128); Err = [System.Drawing.Color]::FromArgb(248, 113, 113)
+        Skip = [System.Drawing.Color]::FromArgb(251, 191, 36); Head = [System.Drawing.Color]::FromArgb(196, 181, 253); Text = $con.ForeColor; Dim = [System.Drawing.Color]::FromArgb(161, 161, 170)
+    }
+    $st.Append = {
+        param($st, [string]$t, $color)
+        $c = $st.Con
+        $c.SelectionStart = $c.TextLength; $c.SelectionLength = 0; $c.SelectionColor = $color
+        $c.AppendText($t + "`n")
+    }
+    & $st.Append $st "Pull main · $((Get-Date).ToString('dd/MM/yyyy HH:mm:ss')) · $($s.Count) repo" $st.Colors.Head
+
+    $timer = New-Object System.Windows.Forms.Timer; $timer.Interval = 120; $timer.Tag = $st; $st.Timer = $timer
+    $timer.Add_Tick({
+        param($sender, $e)
+        $st = $sender.Tag
+        if ($st.Form.IsDisposed) { $sender.Stop(); $sender.Dispose(); return }
+        $line = $null; $n = 0; $col = $st.Colors
+        while ($n -lt 400 -and $st.Q.TryDequeue([ref]$line)) {
+            $n++
+            if ($line -match '^##PROGRESS (\d+)/(\d+) (.*)$') { $st.Bar.Value = [math]::Min($st.Bar.Maximum, [int]$Matches[1] - 1); $st.Cur = "$($Matches[1])/$($Matches[2]): $($Matches[3])"; continue }
+            if ($line -eq '##DONE') { $st.Bar.Value = $st.Bar.Maximum; continue }
+            $c = if ($line -like '$ git*') { $col.Cmd } elseif ($line -like '━━*') { $col.Head } elseif ($line -match '^\s*✓') { $col.Ok } elseif ($line -match '^\s*✗') { $col.Err } elseif ($line -match '^\s*⊘') { $col.Skip } elseif ($line -like '  *') { $col.Dim } else { $col.Text }
+            & $st.Append $st $line $c
+        }
+        if ($n) { $st.Con.SelectionStart = $st.Con.TextLength; $st.Con.ScrollToCaret() }
+        $sec = [int]((Get-Date) - $st.Started).TotalSeconds
+        if (-not $st.Result) {
+            $st.Spin++
+            $st.Lbl.Text = "$($SpinFrames[$st.Spin % 4]) Đang pull main… $($st.Cur) · ${sec}s"
+            return
+        }
+        if ($st.Ended -or $st.Q.Count) { return }     # đợi đọc hết output rồi mới tổng kết
+        $st.Ended = $true; $sender.Stop()
+        $lines = @(if ($st.Result.Ok) { $st.Result.Value } else { "✗ $($st.Result.Value)" })
+        $ok = @($lines | Where-Object { $_ -like '✓*' }).Count; $err = @($lines | Where-Object { $_ -like '✗*' }).Count; $skip = @($lines | Where-Object { $_ -like '⊘*' }).Count
+        & $st.Append $st '' $col.Text
+        & $st.Append $st "━━ TỔNG KẾT · ${sec}s" $col.Head
+        foreach ($l in $lines) { & $st.Append $st $l $(if ($l -like '✓*') { $col.Ok } elseif ($l -like '✗*') { $col.Err } else { $col.Skip }) }
+        $st.Con.SelectionStart = $st.Con.TextLength; $st.Con.ScrollToCaret()
+        $st.Lbl.Text = "$(if ($err) { '⚠' } else { '✓' }) Xong: $ok OK · $err lỗi · $skip bỏ qua · ${sec}s"
+        $st.Lbl.ForeColor = if ($err) { $Theme.Err } elseif ($skip) { $Theme.Warn } else { $Theme.Ok }
+        Set-Status "Pull main: $ok OK, $err lỗi, $skip bỏ qua"
+    })
+
+    $script:reposBusy = $true; $form.Cursor = 'AppStarting'
+    Start-CoreAsync 'Invoke-ReposPullMain $p.Roots $p.Log' @{ Roots = @($s.Root); Log = $st.Q } {
+        param($r, $ctx)
+        $script:reposBusy = $false; $form.Cursor = 'Default'
+        $ctx.St.Result = if ($r) { $r } else { [pscustomobject]@{ Ok = $false; Value = 'Không có kết quả' } }
+        if ($ctx.St.Form.IsDisposed) {         # đã đóng cửa sổ giữa chừng -> báo ở thanh trạng thái
+            $lines = @(if ($r.Ok) { $r.Value } else { "✗ $($r.Value)" })
+            Set-Status "Pull main xong: $(@($lines | Where-Object { $_ -like '✓*' }).Count) OK, $(@($lines | Where-Object { $_ -like '✗*' }).Count) lỗi"
+        }
+        Load-Repos
+        if ($script:gitFor) { Load-GitInfo $script:gitFor }
+        $tb = $script:gitTabBrowser; if ($tb -and -not $tb.Form.IsDisposed) { GitB-Refresh $tb }
+        foreach ($w in @($script:gitWindows.Values)) { if ($w -and -not $w.IsDisposed -and $w.Tag) { GitB-Refresh $w.Tag } }
+    } @{ St = $st }
+
+    Set-ControlTheme $d $Theme $Theme
+    $con.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 27); $con.ForeColor = $st.Colors.Text      # terminal luôn nền tối
+    Add-IconsTo $d
+    $d.Add_Shown({ param($sender, $e) Set-NativeTheme $sender })
+    $d.Add_FormClosing({ param($sender, $e) if (-not $sender.Tag.Result) { $e.Cancel = [System.Windows.Forms.MessageBox]::Show('Pull main vẫn đang chạy. Đóng cửa sổ thì việc vẫn chạy tiếp ở nền, kết quả báo ở thanh trạng thái. Đóng?', 'Pull main', 'YesNo', 'Question') -ne 'Yes' } })
+    $timer.Start()
+    $d.Show($form)
+}
+
 $btnY = 236
 $gitBtns = @(
     @('Làm mới', 72, { Load-Repos }),
     @('Fetch', 60, { $s = @(Get-SelectedRepos -AllIfNone); if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots fetch' @{ Roots = @($s.Root) } "Fetch $($s.Count) repo" } }),
     @('Pull', 54, { $s = @(Get-SelectedRepos -AllIfNone); if ($s.Count) { Invoke-ReposAction 'Invoke-ReposGit $p.Roots pull' @{ Roots = @($s.Root) } "Pull (fast-forward) $($s.Count) repo" } }),
+    @('Pull main…', 92, { Show-PullMainPicker }),
     @('Tạo nhánh…', 96, { Show-NewBranchDialog }),
     @('Commit…', 78, { $r = @(Get-SelectedRepos)[0]; if ($r) { Show-CommitDialog $r.Root } else { Set-Status 'Chọn một repo.' } }),
     @('Push + MR', 88, { Invoke-PushMr })
@@ -2701,6 +2846,7 @@ function Show-GitBrowser([string]$root, $hostPanel = $null) {
     New-ToolButton 'Làm mới' $bar { param($sender, $e) GitB-Refresh (Get-GitBrowserState $sender) } | Out-Null
     New-ToolButton 'Fetch' $bar { param($sender, $e) $st = Get-GitBrowserState $sender; Invoke-ReposAction 'Invoke-ReposGit $p.Roots fetch' @{ Roots = @($st.Root) } 'Fetch' { param($x) GitB-Refresh $x } $st } | Out-Null
     New-ToolButton 'Pull' $bar { param($sender, $e) $st = Get-GitBrowserState $sender; Invoke-ReposAction 'Invoke-ReposGit $p.Roots pull' @{ Roots = @($st.Root) } 'Pull (fast-forward)' { param($x) GitB-Refresh $x } $st } | Out-Null
+    New-ToolButton 'Pull main' $bar { param($sender, $e) $st = Get-GitBrowserState $sender; Start-ReposPullMain @([pscustomobject]@{ Root = $st.Root; Name = (Split-Path $st.Root -Leaf); Branch = $st.Branch }) -Confirm } | Out-Null
     $st.BtnCommit = New-ToolButton 'Commit…' $bar { param($sender, $e) $st = Get-GitBrowserState $sender; Show-CommitDialog $st.Root $st }
     $st.BtnCommit.Tag = 'primary'
     $st.BtnCommit.Font = New-Object System.Drawing.Font($font, [System.Drawing.FontStyle]::Bold)
@@ -2908,6 +3054,9 @@ function Show-CommitDialog([string]$root, $browserSt = $null) {
     New-ToolButton '⇊ Stage tất cả' $mid { param($sender, $e) $cs = $sender.FindForm().Tag; Invoke-CommitStage $cs $true $true } | Out-Null
     New-ToolButton '↑ Unstage' $mid { param($sender, $e) $cs = $sender.FindForm().Tag; Invoke-CommitStage $cs $false $false } | Out-Null
     New-ToolButton '⇈ Unstage tất cả' $mid { param($sender, $e) $cs = $sender.FindForm().Tag; Invoke-CommitStage $cs $false $true } | Out-Null
+    New-ToolButton '↶ Bỏ thay đổi' $mid { param($sender, $e) Invoke-CommitDiscard $sender.FindForm().Tag } | Out-Null
+    New-ToolButton '🗑 Xoá file' $mid { param($sender, $e) Invoke-CommitDelete $sender.FindForm().Tag } | Out-Null
+    New-ToolButton '📦 Stash ▾' $mid { param($sender, $e) Show-CommitStashMenu $sender.FindForm().Tag $sender } | Out-Null
     $lblS = New-Object System.Windows.Forms.Label; $lblS.Dock = 'Top'; $lblS.Height = 24; $lblS.Padding = New-Object System.Windows.Forms.Padding(4, 4, 0, 0)
     $lblS.Font = $lblW.Font
     $lvS = New-GitListView @(@('', 26), @('File', 380))
@@ -2915,8 +3064,10 @@ function Show-CommitDialog([string]$root, $browserSt = $null) {
     $cs.LvW = $lvW; $cs.LvS = $lvS; $cs.LblW = $lblW; $cs.LblS = $lblS
     foreach ($lv in @($lvW, $lvS)) {
         $lv.Add_SelectedIndexChanged({ param($sender, $e) $cs = $sender.FindForm().Tag; if ($sender.SelectedItems.Count -eq 1 -and $sender.Focused) { Show-CommitFileDiff $cs $sender.SelectedItems[0].Tag } })
-        $lv.Add_GotFocus({ param($sender, $e) $cs = $sender.FindForm().Tag; if ($sender.SelectedItems.Count -eq 1) { Show-CommitFileDiff $cs $sender.SelectedItems[0].Tag } })
+        $lv.Add_GotFocus({ param($sender, $e) $cs = $sender.FindForm().Tag; $cs.ActiveLv = $sender; if ($sender.SelectedItems.Count -eq 1) { Show-CommitFileDiff $cs $sender.SelectedItems[0].Tag } })
     }
+    $lvW.ContextMenuStrip = New-CommitFileMenu $cs $false
+    $lvS.ContextMenuStrip = New-CommitFileMenu $cs $true
     $lvW.Add_DoubleClick({ param($sender, $e) Invoke-CommitStage $sender.FindForm().Tag $true $false })
     $lvS.Add_DoubleClick({ param($sender, $e) Invoke-CommitStage $sender.FindForm().Tag $false $false })
     $lvW.Add_KeyDown({ param($sender, $e) if ($e.KeyCode -in 'Space', 'Enter') { Invoke-CommitStage $sender.FindForm().Tag $true $false; $e.Handled = $true } })
@@ -3011,7 +3162,8 @@ function Update-CommitChanges($cs) {
             $pair[2].Text = "$($pair[3]) ($($items.Count))"
         }
         $nS = $cs.LvS.Items.Count
-        Set-CommitStatus $cs $(if ($all.Count) { "$($cs.LvW.Items.Count) file chưa stage · $nS file đã stage · double-click / Space để chuyển qua lại" } else { 'Không có thay đổi nào để commit.' })
+        $notice = if ($cs.Notice) { "$($cs.Notice)  ·  " } else { '' }; $cs.Notice = $null      # kết quả bỏ thay đổi / stash vừa làm
+        Set-CommitStatus $cs ($notice + $(if ($all.Count) { "$($cs.LvW.Items.Count) file chưa stage · $nS file đã stage · double-click / Space để chuyển qua lại · chuột phải để bỏ thay đổi / xoá / stash" } else { 'Không có thay đổi nào để commit.' }))
         if (-not $cs.LvW.SelectedItems.Count -and -not $cs.LvS.SelectedItems.Count) {
             $first = @($cs.LvW.Items) + @($cs.LvS.Items) | Select-Object -First 1
             if ($first) { Show-CommitFileDiff $cs $first.Tag } else { $cs.Diff.Text = '' }
@@ -3049,6 +3201,131 @@ function Invoke-CommitStage($cs, [bool]$stage, [bool]$all) {
         if (-not $r.Ok) { [System.Windows.Forms.MessageBox]::Show([string]$r.Value, 'Git', 'OK', 'Warning') | Out-Null }
         Update-CommitChanges $cs
     } @{ Cs = $cs }
+}
+
+# ---- Bỏ thay đổi / Xoá file / Stash trong cửa sổ Commit ----
+# Chạy một hàm git của core ở nền, xong thì tải lại danh sách file (và cửa sổ Git nếu đang mở)
+function Start-CommitGitJob($cs, [string]$code, [hashtable]$params, [string]$busyText) {
+    if ($cs.Busy -or $script:reposBusy) { Set-CommitStatus $cs 'Git đang xử lý tác vụ trước, vui lòng chờ.'; return }
+    $cs.Busy = $true; $script:reposBusy = $true; $cs.DiffKey = ''
+    Set-CommitStatus $cs $busyText
+    Start-CoreAsync $code $params {
+        param($r, $ctx)
+        $cs = $ctx.Cs
+        $cs.Busy = $false; $script:reposBusy = $false
+        if ($cs.Form.IsDisposed) { return }
+        if ($r.Ok) { $cs.Notice = '✓ ' + ([string]$r.Value); Set-Status $cs.Notice }
+        else { Set-CommitStatus $cs 'Lỗi.'; [System.Windows.Forms.MessageBox]::Show([string]$r.Value, 'Git', 'OK', 'Warning') | Out-Null }
+        Update-CommitChanges $cs
+        if ($cs.Browser -and -not $cs.Browser.Form.IsDisposed) { GitB-Refresh $cs.Browser }
+    } @{ Cs = $cs }
+}
+# Các file đang chọn ở danh sách vừa thao tác (Chưa stage hoặc Đã stage)
+function Get-CommitSelection($cs) {
+    $lv = $cs.ActiveLv
+    if (-not $lv -or -not $lv.SelectedItems.Count) { $lv = @($cs.LvW, $cs.LvS) | Where-Object { $_.SelectedItems.Count } | Select-Object -First 1 }
+    if (-not $lv) { return @() }
+    @($lv.SelectedItems | ForEach-Object { $_.Tag })
+}
+function Format-FileList($items) {
+    $names = @($items | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.Path } })
+    (($names | Select-Object -First 12) -join "`n") + $(if ($names.Count -gt 12) { "`n… và $($names.Count - 12) file khác" } else { '' })
+}
+function Invoke-CommitDiscard($cs) {
+    $sel = @(Get-CommitSelection $cs)
+    if (-not $sel.Count) { Set-CommitStatus $cs 'Chọn file cần bỏ thay đổi trước (Ctrl/Shift + click để chọn nhiều).'; return }
+    if (@($sel | Where-Object Code -eq 'U').Count) { Set-CommitStatus $cs 'File đang xung đột merge - xử lý xung đột trước, không bỏ thay đổi ở đây.'; return }
+    $staged = [bool]@($sel | Where-Object Staged).Count
+    $newOnes = @($sel | Where-Object { $_.Code -in '?', 'A' }).Count
+    $q = "Bỏ thay đổi của $($sel.Count) file?`n`n$(Format-FileList $sel)`n`n" +
+         $(if ($staged) { 'File đã stage sẽ về đúng như commit cuối (HEAD), mất cả phần đã stage lẫn chưa stage.' } else { 'File sẽ về như bản đã stage / commit cuối.' }) +
+         $(if ($newOnes) { "`n$newOnes file mới sẽ được chuyển vào Thùng rác." } else { '' }) +
+         "`n`nThay đổi bị bỏ KHÔNG lấy lại được bằng git (muốn giữ lại thì dùng Stash)."
+    if ([System.Windows.Forms.MessageBox]::Show($q, 'Bỏ thay đổi', 'YesNo', 'Warning', 'Button2') -ne 'Yes') { return }
+    Start-CommitGitJob $cs 'Undo-RepoChanges $p.Root $p.Items' @{ Root = $cs.Root; Items = $sel } 'Đang bỏ thay đổi...'
+}
+function Invoke-CommitDelete($cs) {
+    $sel = @(Get-CommitSelection $cs | Where-Object { $_.Code -ne 'D' })
+    if (-not $sel.Count) { Set-CommitStatus $cs 'Chọn file cần xoá trước (file đã bị xoá thì không cần xoá nữa).'; return }
+    $paths = @($sel.Path | Sort-Object -Unique)
+    $q = "Xoá $($paths.Count) file khỏi thư mục làm việc?`n`n$(Format-FileList $paths)`n`nFile được chuyển vào Thùng rác (khôi phục được). File đã track sẽ hiện là ""Xoá"" trong danh sách để commit."
+    if ([System.Windows.Forms.MessageBox]::Show($q, 'Xoá file', 'YesNo', 'Warning', 'Button2') -ne 'Yes') { return }
+    Start-CommitGitJob $cs 'Remove-RepoFiles $p.Root $p.Paths' @{ Root = $cs.Root; Paths = $paths } 'Đang xoá file...'
+}
+function Invoke-CommitStashSave($cs, [bool]$selectedOnly) {
+    $paths = @()
+    if ($selectedOnly) {
+        $paths = @(Get-CommitSelection $cs | ForEach-Object { $_.Path; if ($_.Old) { $_.Old } } | Sort-Object -Unique)
+        if (-not $paths.Count) { Set-CommitStatus $cs 'Chọn file cần stash trước.'; return }
+    }
+    $what = if ($selectedOnly) { "$($paths.Count) file đang chọn" } else { 'toàn bộ thay đổi (kể cả file mới chưa track)' }
+    $m = [Microsoft.VisualBasic.Interaction]::InputBox("Cất tạm $what vào stash.`nThư mục làm việc sẽ trở lại sạch như commit cuối; lấy lại bất cứ lúc nào ở nút Stash.`n`nGhi chú cho stash (có thể để trống):", 'Stash', "WIP $(Get-Date -Format 'dd/MM HH:mm')")
+    if ($null -eq $m -or ($m -eq '' -and [System.Windows.Forms.MessageBox]::Show('Stash không có ghi chú?', 'Stash', 'YesNo', 'Question') -ne 'Yes')) { return }
+    Start-CommitGitJob $cs 'Save-RepoStash $p.Root $p.Msg $p.Paths' @{ Root = $cs.Root; Msg = [string]$m; Paths = $paths } 'Đang stash...'
+}
+function Invoke-CommitStashAction($cs, [string]$action, $st) {
+    if ($action -in 'pop', 'drop') {
+        $q = if ($action -eq 'drop') { "Xoá hẳn $($st.Ref)?`n$($st.Message)`n`nThay đổi trong stash này sẽ mất." } else { "Lấy lại $($st.Ref) vào thư mục làm việc rồi xoá stash?`n$($st.Message)" }
+        if ([System.Windows.Forms.MessageBox]::Show($q, 'Stash', 'YesNo', $(if ($action -eq 'drop') { 'Warning' } else { 'Question' }), 'Button2') -ne 'Yes') { return }
+    }
+    Start-CommitGitJob $cs 'Invoke-RepoStash $p.Root $p.Action $p.Index' @{ Root = $cs.Root; Action = $action; Index = [int]$st.Index } "Đang $action $($st.Ref)..."
+}
+function Show-CommitStashDiff($cs, $st) {
+    $key = "stash|$($st.Index)|$($st.Message)"
+    $cs.DiffKey = $key
+    foreach ($lv in @($cs.LvW, $cs.LvS)) { $lv.SelectedItems.Clear() }
+    Start-CoreAsync 'Get-RepoStashDiff $p.Root $p.Index' @{ Root = $cs.Root; Index = [int]$st.Index } {
+        param($r, $ctx)
+        $cs = $ctx.Cs
+        if ($cs.Form.IsDisposed -or $cs.DiffKey -ne $ctx.Key) { return }
+        Show-DiffText $cs.Diff $(if ($r.Ok) { "# $($ctx.St.Ref) · $($ctx.St.When) · $($ctx.St.Message)`n" + [string]$r.Value } else { "Lỗi: $($r.Value)" })
+        Set-CommitStatus $cs "Đang xem $($ctx.St.Ref) - lấy lại / xoá ở nút Stash."
+    } @{ Cs = $cs; Key = $key; St = $st }
+}
+function Show-CommitStashMenu($cs, $anchor) {
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    $hasSel = [bool]@(Get-CommitSelection $cs).Count
+    $mi = $m.Items.Add('Stash tất cả thay đổi…', $null, { param($s, $e) Invoke-CommitStashSave $s.Owner.Tag $false }); $mi.Font = New-Object System.Drawing.Font($m.Font, [System.Drawing.FontStyle]::Bold)
+    $mi = $m.Items.Add('Stash file đang chọn…', $null, { param($s, $e) Invoke-CommitStashSave $s.Owner.Tag $true }); $mi.Enabled = $hasSel
+    [void]$m.Items.Add('-')
+    $list = try { @(Get-RepoStashes $cs.Root) } catch { @() }
+    if (-not $list.Count) { $e = $m.Items.Add('Chưa có stash nào'); $e.Enabled = $false }
+    foreach ($st in $list) {
+        $sub = New-Object System.Windows.Forms.ToolStripMenuItem("$($st.Ref)  ·  $($st.Message)  ·  $($st.When)")
+        $sub.Tag = $st
+        foreach ($a in @(@('Xem thay đổi', 'view'), @('Lấy lại (giữ stash) - apply', 'apply'), @('Lấy lại và xoá stash - pop', 'pop'), @('-', ''), @('Xoá stash - drop', 'drop'))) {
+            if ($a[0] -eq '-') { [void]$sub.DropDownItems.Add('-'); continue }
+            $it = $sub.DropDownItems.Add($a[0], $null, {
+                param($s, $e)
+                $st = $s.OwnerItem.Tag; $cs = $s.OwnerItem.Owner.Tag
+                if ($s.Tag -eq 'view') { Show-CommitStashDiff $cs $st } else { Invoke-CommitStashAction $cs $s.Tag $st }
+            })
+            $it.Tag = $a[1]
+        }
+        [void]$m.Items.Add($sub)
+    }
+    $m.Tag = $cs
+    Add-MenuIcons $m.Items
+    Set-MenuTheme $m $Theme $Theme ($script:ThemeName -eq 'dark')
+    $m.Show($anchor, (New-Object System.Drawing.Point(0, $anchor.Height)))
+}
+# Menu chuột phải trên danh sách file của cửa sổ Commit
+function New-CommitFileMenu($cs, [bool]$stagedList) {
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    $m.Tag = $cs
+    $mi = $m.Items.Add($(if ($stagedList) { '↑ Unstage' } else { '↓ Stage' }), $null, { param($s, $e) $cs = $s.Owner.Tag; Invoke-CommitStage $cs (-not $s.Tag) $false }); $mi.Tag = $stagedList
+    $mi.Font = New-Object System.Drawing.Font($m.Font, [System.Drawing.FontStyle]::Bold)
+    [void]$m.Items.Add('-')
+    [void]$m.Items.Add('↶ Bỏ thay đổi…', $null, { param($s, $e) Invoke-CommitDiscard $s.Owner.Tag })
+    [void]$m.Items.Add('🗑 Xoá file…', $null, { param($s, $e) Invoke-CommitDelete $s.Owner.Tag })
+    [void]$m.Items.Add('📦 Stash file đang chọn…', $null, { param($s, $e) Invoke-CommitStashSave $s.Owner.Tag $true })
+    [void]$m.Items.Add('-')
+    [void]$m.Items.Add('Mở file', $null, { param($s, $e) $cs = $s.Owner.Tag; foreach ($c in @(Get-CommitSelection $cs)) { $f = Join-Path $cs.Root $c.Path; if (Test-Path -LiteralPath $f -PathType Leaf) { Start-Process $f } } })
+    [void]$m.Items.Add('Mở thư mục chứa file', $null, { param($s, $e) $cs = $s.Owner.Tag; $c = @(Get-CommitSelection $cs)[0]; if ($c) { $f = Join-Path $cs.Root $c.Path; if (Test-Path -LiteralPath $f) { Start-Process explorer.exe "/select,`"$f`"" } else { Start-Process explorer.exe "`"$(Split-Path $f)`"" } } })
+    [void]$m.Items.Add('Copy đường dẫn', $null, { param($s, $e) $cs = $s.Owner.Tag; $t = @(Get-CommitSelection $cs | ForEach-Object { $_.Path }) -join "`r`n"; if ($t) { [System.Windows.Forms.Clipboard]::SetText($t) } })
+    $m.Add_Opening({ param($sender, $e) $has = [bool]@(Get-CommitSelection $sender.Tag).Count; foreach ($i in $sender.Items) { if ($i -is [System.Windows.Forms.ToolStripMenuItem]) { $i.Enabled = $has } } })
+    Set-MenuTheme $m $Theme $Theme ($script:ThemeName -eq 'dark')
+    $m
 }
 
 function Invoke-CommitNow($cs, [bool]$push) {
@@ -3413,6 +3690,9 @@ DỊCH VỤ
 
 GIT
   Tất cả repo trong danh mục: nhánh, chậm/nhanh hơn remote (↓ ↑), số file sửa; Fetch / Pull nhiều repo một lúc.
+  Pull main: lấy code main mới nhất về các repo đang chọn (không chọn = tất cả), cửa sổ terminal hiện từng lệnh git.
+    Repo ở main → pull; nhánh khác → merge origin/main vào nhánh (chưa push), xung đột thì tự huỷ merge.
+    Bỏ qua repo ở production / hotfix và repo còn file đang sửa.
   Tạo nhánh theo git-flow:
     feature/ · fix/ · bugfix/  tách từ main → Push + MR → Merge Request vào main
     hotfix/ (chỉ lỗi gấp trên production)  tách từ production → MR vào production → cherry-pick sang main
@@ -3423,6 +3703,10 @@ GIT
   Commit…: danh sách Chưa stage / Đã stage, ↓ Stage · ↑ Unstage (double-click / Space), diff từng file,
     commit message (tự bỏ dấu), Commit hoặc Commit & Push + mở Merge Request.
     Nút "⎇ Nhánh mới…" trong màn hình Commit: tạo nhánh mới mang theo các file đang sửa (lỡ sửa trên main).
+    Bỏ thay đổi: trả file đang chọn về như bản đã commit (file mới thì chuyển vào Thùng rác).
+    Xoá file: chuyển file vào Thùng rác, file đã track hiện là "Xoá" để commit.
+    Stash ▾: cất tạm toàn bộ / file đang chọn (kể cả file mới); danh sách stash để xem, lấy lại (apply / pop) hoặc xoá.
+    Chuột phải trên danh sách file: Stage / Unstage, Bỏ thay đổi, Xoá, Stash, mở file / thư mục, copy đường dẫn.
 
 AI CODE
   Lần đầu mở tab: chọn Claude Code, Codex, Gemini CLI hoặc DeepSeek Code.

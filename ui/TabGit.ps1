@@ -102,14 +102,17 @@ function Initialize-GitTab {
         try { if ($dialog.ShowDialog() -eq 'OK') { Open-GitRepo $dialog.SelectedPath } } finally { $dialog.Dispose() }
     }
     $reload = New-Button 'Quét repo' 724 6 120 $row { Load-Repos }
-    $open.Anchor = 'Top, Right'; $reload.Anchor = 'Top, Right'
+    # Pull main cho nhiều repo: mở hộp tick chọn repo rồi chạy, có cửa sổ terminal theo dõi
+    $pullMain = New-Button 'Pull main…' 852 6 120 $row { Show-PullMainPicker }
+    $tipDoc.SetToolTip($pullMain, 'Lấy code main mới nhất về nhiều repo (bỏ qua production / hotfix)')
+    foreach ($b in @($open, $reload, $pullMain)) { $b.Anchor = 'Top, Right' }
     $row.Width = $pageGit.ClientSize.Width
     $pageGit.Controls.Add($row); $script:gitBrowserHost.BringToFront()
+    $row.Tag = @($open, $reload, $pullMain)
     $pickerLayout = { param($s, $e)
-        $buttons = @($s.Controls | Where-Object { $_ -is [System.Windows.Forms.Button] } | Sort-Object Left)
-        $buttons[1].Left = $s.Width - $buttons[1].Width - 8
-        $buttons[0].Left = $buttons[1].Left - $buttons[0].Width - 8
-        $script:gitRepoPicker.Width = [math]::Max(100, $buttons[0].Left - 96)
+        $x = $s.Width - 8                              # xếp các nút từ phải sang: Pull main… · Quét repo · Mở repo…
+        foreach ($b in @($s.Tag)[-1..-(@($s.Tag).Count)]) { $x -= $b.Width; $b.Left = $x; $x -= 8 }
+        $script:gitRepoPicker.Width = [math]::Max(100, $x - 88)
     }
     $row.Add_Resize($pickerLayout); & $pickerLayout $row $null
     $script:gitRepoPicker.Add_SelectedIndexChanged({ if (-not $script:syncingGitPicker) { Update-GitTabBrowser } })

@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.8'
+$PanelVersion = '1.0.9'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -1143,6 +1143,60 @@ function Invoke-ReposGit([string[]]$roots, [string]$action) {
     , @($out)
 }
 
+# Lấy code main mới nhất về nhiều repo. $log (ConcurrentQueue[string], có thể null) nhận từng dòng lệnh + output để
+# cửa sổ terminal của panel hiện trực tiếp; dòng "##PROGRESS i/n tên" để cập nhật thanh tiến độ.
+#   đang ở main         -> fetch origin main, merge --ff-only (= pull fast-forward)
+#   nhánh khác          -> fetch, merge origin/main vào nhánh đó (không push); xung đột -> merge --abort, báo file xung đột
+#   production, hotfix/* -> bỏ qua (theo git-flow tách từ production, không nhận main)
+#   còn file đã track đang sửa -> bỏ qua khi phải merge (merge --abort không giữ an toàn được thay đổi chưa commit)
+function Invoke-ReposPullMain([string[]]$roots, $log = $null) {
+    $say = { param($t) if ($log) { $log.Enqueue([string]$t) } }
+    $git = {
+        param($root, [string[]]$a, [int]$ms = 180000)
+        & $say ('$ git ' + ($a -join ' '))
+        $r = Invoke-Git $root $a $ms
+        foreach ($l in (@($r.Out, $r.Err) -join "`n") -split "`r?`n") { if ($l.Trim()) { & $say "  $l" } }
+        if ($r.Code -ne 0) { & $say "  (thoát mã $($r.Code))" }
+        $r
+    }
+    $i = 0
+    $out = foreach ($root in $roots) {
+        $i++; $leaf = Split-Path $root -Leaf
+        & $say "##PROGRESS $i/$($roots.Count) $leaf"
+        & $say ''; & $say "━━ [$i/$($roots.Count)] $leaf  ($root)"
+        $branch = (Invoke-Git $root @('rev-parse', '--abbrev-ref', 'HEAD')).Out.Trim()
+        if (-not $branch -or $branch -eq 'HEAD') { $m = "⊘ ${leaf}: không ở nhánh nào (detached HEAD) - bỏ qua"; & $say $m; $m; continue }
+        & $say "  nhánh hiện tại: $branch"
+        if ($branch -eq 'production' -or $branch -like 'hotfix/*') { $m = "⊘ ${leaf}: đang ở $branch - bỏ qua (production / hotfix không nhận main)"; & $say $m; $m; continue }
+        $f = & $git $root @('fetch', 'origin', 'main')
+        if ($f.Code -ne 0) {
+            $m = if ((@($f.Out, $f.Err) -join ' ') -match "couldn't find remote ref") { "✗ ${leaf}: remote không có nhánh main" } else { "✗ ${leaf}: $(Format-GitError $root ((@($f.Out, $f.Err) | Where-Object { $_ }) -join "`n"))" }
+            & $say $m; $m; continue
+        }
+        $behind = [int]((Invoke-Git $root @('rev-list', '--count', 'HEAD..origin/main')).Out.Trim() -replace '\D', '0')
+        if (-not $behind) { $m = "✓ ${leaf} ($branch): đã có code main mới nhất"; & $say "  $m"; $m; continue }
+        & $say "  origin/main có $behind commit mà $branch chưa có"
+        if ($branch -eq 'main') {
+            $r = & $git $root @('merge', '--ff-only', 'origin/main')
+            $m = if ($r.Code -eq 0) { "✓ ${leaf} (main): pull $behind commit" } else { "✗ ${leaf} (main): $(Format-GitError $root ((@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"))" }
+            & $say $m; $m; continue
+        }
+        $dirty = @((Invoke-Git $root @('status', '--porcelain', '--untracked-files=no')).Out -split "`n" | Where-Object { $_.Trim() }).Count
+        if ($dirty) { $m = "⊘ ${leaf} ($branch): còn $dirty file đang sửa - commit hoặc stash trước rồi pull main lại"; & $say $m; $m; continue }
+        & $git $root @('fetch', 'origin', 'main:main') 60000 | Out-Null          # cập nhật luôn nhánh main ở máy (lỗi thì thôi)
+        $r = & $git $root @('merge', '--no-edit', 'origin/main')
+        if ($r.Code -eq 0) { $m = "✓ ${leaf} ($branch): đã merge $behind commit của main - chưa push"; & $say $m; $m; continue }
+        $conf = @((Invoke-Git $root @('-c', 'core.quotePath=false', 'diff', '--name-only', '--diff-filter=U')).Out -split "`n" | Where-Object { $_ })
+        if ($conf.Count) {
+            & $git $root @('merge', '--abort') | Out-Null
+            $m = "✗ ${leaf} ($branch): xung đột với main ở $($conf.Count) file ($((@($conf | Select-Object -First 5)) -join ', ')$(if ($conf.Count -gt 5) { ', …' })) - đã huỷ merge, repo giữ nguyên; cần merge bằng tay"
+        } else { $m = "✗ ${leaf} ($branch): $(Format-GitError $root ((@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"))" }
+        & $say $m; $m
+    }
+    & $say '##DONE'
+    , @($out)
+}
+
 # Tạo nhánh theo git-flow: feature/ fix/ bugfix/ tách từ main, hotfix/ tách từ production.
 # Tách từ origin/<gốc> mới fetch (= pull nhánh gốc rồi tách), không track nhánh gốc, không push.
 # $carry = mang theo thay đổi chưa commit sang nhánh mới (git switch tự từ chối nếu xung đột với nhánh gốc)
@@ -1378,6 +1432,102 @@ function Get-WorkingDiff([string]$root, [string]$path, [bool]$staged, [string]$c
     $a = @('-c', 'core.quotePath=false', 'diff')
     if ($staged) { $a += '--cached' }
     (Invoke-Git $root ($a + @('-M', '--', $path))).Out
+}
+
+# Đường dẫn file trong repo (đường dẫn tương đối từ git status) -> đường dẫn đầy đủ; chặn thoát ra ngoài repo
+function Resolve-RepoFile([string]$root, [string]$path) {
+    $base = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    $full = [IO.Path]::GetFullPath((Join-Path $base $path))
+    if (-not $full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw "Đường dẫn ngoài repo: $path" }
+    $full
+}
+# Chuyển file vào Thùng rác (khôi phục được) thay vì xoá hẳn
+function Move-ToRecycleBin([string]$full) {
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    if (Test-Path -LiteralPath $full -PathType Container) {
+        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($full, 'OnlyErrorDialogs', 'SendToRecycleBin')
+    } elseif (Test-Path -LiteralPath $full) {
+        [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($full, 'OnlyErrorDialogs', 'SendToRecycleBin')
+    }
+}
+function Invoke-GitChecked([string]$root, [string[]]$gitArgs) {
+    $r = Invoke-Git $root $gitArgs 120000
+    if ($r.Code -ne 0) { throw ((@($r.Err, $r.Out) | Where-Object { $_ }) -join "`n") }
+    $r
+}
+# Bỏ thay đổi: $items là các dòng của Get-RepoChanges (Path, Code, Staged, Old).
+#   chưa stage: file đã track -> lấy lại bản trong index; file mới chưa track -> chuyển vào Thùng rác
+#   đã stage: đưa cả index lẫn thư mục làm việc về như HEAD; file mới thêm (A) -> bỏ khỏi index và chuyển vào Thùng rác
+function Undo-RepoChanges([string]$root, $items) {
+    $done = 0
+    foreach ($c in @($items)) {
+        $full = Resolve-RepoFile $root $c.Path
+        if ($c.Code -eq 'U') { throw "$($c.Path) đang xung đột merge - xử lý xung đột trước" }
+        if (-not $c.Staged) {
+            if ($c.Code -eq '?') { Move-ToRecycleBin $full }
+            else { Invoke-GitChecked $root @('restore', '--worktree', '--', $c.Path) | Out-Null }
+        } else {
+            if ($c.Code -eq 'A') { Invoke-GitChecked $root @('rm', '--cached', '-q', '-f', '--', $c.Path) | Out-Null; Move-ToRecycleBin $full }
+            elseif ($c.Code -eq 'R' -and $c.Old) {
+                Invoke-GitChecked $root @('rm', '--cached', '-q', '-f', '--', $c.Path) | Out-Null; Move-ToRecycleBin $full
+                Invoke-GitChecked $root @('restore', '--source=HEAD', '--staged', '--worktree', '--', $c.Old) | Out-Null
+            }
+            else { Invoke-GitChecked $root @('restore', '--source=HEAD', '--staged', '--worktree', '--', $c.Path) | Out-Null }
+        }
+        $done++
+    }
+    "Đã bỏ thay đổi $done file"
+}
+# Xoá file khỏi thư mục làm việc (vào Thùng rác); file đã track sẽ hiện là "Xoá" để commit
+function Remove-RepoFiles([string]$root, [string[]]$paths) {
+    $n = 0
+    foreach ($p in @($paths | Sort-Object -Unique)) { $full = Resolve-RepoFile $root $p; if (Test-Path -LiteralPath $full) { Move-ToRecycleBin $full; $n++ } }
+    "Đã chuyển $n file vào Thùng rác"
+}
+
+# ---- Stash ----
+function Get-RepoStashes([string]$root) {
+    $r = Invoke-Git $root @('stash', 'list', '--format=%gd%x1f%cr%x1f%gs')
+    if ($r.Code -ne 0) { throw $r.Err }
+    foreach ($l in ($r.Out -split "`n" | Where-Object { $_ })) {
+        $f = $l -split [char]0x1f
+        if ($f.Count -ge 3 -and $f[0] -match '^stash@\{(\d+)\}$') { [pscustomobject]@{ Ref = $f[0]; Index = [int]$Matches[1]; When = $f[1]; Message = $f[2] } }
+    }
+}
+# $paths rỗng = stash toàn bộ; luôn kèm file mới chưa track (-u)
+function Save-RepoStash([string]$root, [string]$message, [string[]]$paths = @()) {
+    $a = @('stash', 'push', '-u')
+    if ($message.Trim()) { $a += @('-m', $message.Trim()) }
+    if (@($paths).Count) { $a += @('--') + @($paths | Sort-Object -Unique) }
+    $r = Invoke-GitChecked $root $a
+    $t = (@($r.Out, $r.Err) -join "`n").Trim()
+    if ($t -match 'No local changes to save') { throw 'Không có thay đổi nào để stash' }
+    'Đã stash: ' + (($t -split "`n")[0])
+}
+function Invoke-RepoStash([string]$root, [string]$action, [int]$index) {
+    if ($action -notin 'apply', 'pop', 'drop') { throw "Thao tác stash không hợp lệ: $action" }
+    $ref = "stash@{$index}"
+    $a = @('stash', $action)
+    if ($action -ne 'drop') { $a += '--index' }        # giữ đúng file nào đã stage / chưa stage như lúc stash
+    $r = Invoke-Git $root ($a + @($ref)) 120000
+    $t = (@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"
+    if ($r.Code -ne 0 -and $t -match 'without --index') {          # index không khôi phục được -> lấy lại thay đổi, bỏ phân biệt stage
+        $r = Invoke-Git $root @('stash', $action, $ref) 120000
+        $t = (@($r.Out, $r.Err) | Where-Object { $_ }) -join "`n"
+    }
+    if ($r.Code -ne 0) {
+        if ($t -match 'conflict|CONFLICT') { throw "Lấy stash bị xung đột với thay đổi đang có. Stash vẫn được giữ lại.`n`n$t" }
+        if ($t -match 'already exists, no checkout|would be overwritten') { throw "Có file đang sửa trùng với file trong stash - commit hoặc stash thay đổi hiện tại trước.`n`n$t" }
+        throw $t
+    }
+    switch ($action) { 'apply' { "Đã lấy lại $ref (stash vẫn được giữ)" } 'pop' { "Đã lấy lại và xoá $ref" } 'drop' { "Đã xoá $ref" } }
+}
+function Get-RepoStashDiff([string]$root, [int]$index) {
+    $ref = "stash@{$index}"
+    $r = Invoke-Git $root @('-c', 'core.quotePath=false', 'stash', 'show', '-p', '--include-untracked', $ref)
+    if ($r.Code -ne 0) { $r = Invoke-Git $root @('-c', 'core.quotePath=false', 'stash', 'show', '-p', $ref) }   # git cũ chưa có --include-untracked
+    if ($r.Code -ne 0) { throw $r.Err }
+    $r.Out
 }
 
 function Invoke-RepoCommit([string]$root, [string]$message) {
