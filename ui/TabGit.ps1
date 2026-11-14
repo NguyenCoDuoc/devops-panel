@@ -84,6 +84,16 @@ function Enable-GitTreeTheme($tree) {
     })
 }
 
+function Set-GitTabEmpty([string]$message) {
+    foreach ($control in @($script:gitBrowserHost.Controls)) { $control.Dispose() }
+    $script:gitTabBrowser = $null
+    $empty = New-Object System.Windows.Forms.Label
+    $empty.Dock = 'Fill'; $empty.Text = $message; $empty.TextAlign = 'MiddleCenter'
+    $empty.ForeColor = $Theme.Muted; $empty.BackColor = $Theme.Surface
+    $script:gitBrowserHost.Controls.Add($empty)
+    $script:gitEmptyState = $empty
+}
+
 function Initialize-GitTab {
     $script:gitManualRoots = @()
     foreach ($control in $pageGit.Controls) { $control.Visible = $false }
@@ -104,7 +114,7 @@ function Initialize-GitTab {
     $reload = New-Button 'Quét repo' 724 6 120 $row { Load-Repos }
     # Pull main cho nhiều repo: mở hộp tick chọn repo rồi chạy, có cửa sổ terminal theo dõi
     $pullMain = New-Button 'Pull main…' 852 6 120 $row { Show-PullMainPicker }
-    $tipDoc.SetToolTip($pullMain, 'Lấy code main mới nhất về nhiều repo (bỏ qua production / hotfix)')
+    $tipDoc.SetToolTip($pullMain, 'Không cần chọn repo ở ô trên; chọn một hoặc nhiều repo trong hộp thoại (bỏ qua production / hotfix)')
     foreach ($b in @($open, $reload, $pullMain)) { $b.Anchor = 'Top, Right' }
     $row.Width = $pageGit.ClientSize.Width
     $pageGit.Controls.Add($row); $script:gitBrowserHost.BringToFront()
@@ -116,8 +126,7 @@ function Initialize-GitTab {
     }
     $row.Add_Resize($pickerLayout); & $pickerLayout $row $null
     $script:gitRepoPicker.Add_SelectedIndexChanged({ if (-not $script:syncingGitPicker) { Update-GitTabBrowser } })
-    $empty = New-Label 'Chọn hoặc mở repository để xem nhánh, lịch sử và diff.' 16 16 600 $script:gitBrowserHost
-    $empty.AutoSize = $true
+    Set-GitTabEmpty 'Chọn hoặc mở repository để xem nhánh, lịch sử và diff.'
     Set-ControlTheme $pageGit $Theme $Theme; Add-IconsTo $row
 }
 
@@ -135,11 +144,19 @@ function Sync-GitRepoPicker {
 
 function Update-GitTabBrowser([switch]$Force) {
     $repo = $script:gitRepoPicker.SelectedItem
-    if (-not $repo) { return }
+    if (-not $repo) {
+        $message = if (-not $script:reposLoaded) { 'Danh sách repository chưa tải. Bấm “Quét repo” để bắt đầu.' }
+                   elseif (@($script:repos | Where-Object IsRepo).Count) { 'Chọn hoặc mở repository để xem nhánh, lịch sử và diff.' }
+                   else { 'Chưa có repository Git. Thêm thư mục ở tab Cài đặt rồi bấm “Quét repo”.' }
+        if (-not $script:gitEmptyState -or $script:gitEmptyState.IsDisposed -or $script:gitEmptyState.Text -ne $message) { Set-GitTabEmpty $message }
+        $tipDoc.SetToolTip($script:gitRepoPicker, '')
+        return
+    }
     $tipDoc.SetToolTip($script:gitRepoPicker, $repo.Root)
     $st = $script:gitTabBrowser
     if ($st -and -not $st.Form.IsDisposed -and $st.Root -eq $repo.Root) { if ($Force) { GitB-Refresh $st }; return }
     foreach ($control in @($script:gitBrowserHost.Controls)) { $control.Dispose() }
+    $script:gitEmptyState = $null
     $script:gitTabBrowser = Show-GitBrowser $repo.Root $script:gitBrowserHost
 }
 

@@ -1037,7 +1037,7 @@ function Test-GoalsDaily {
     $left = @(Get-TodayGoals | Where-Object { -not $_.done })
     if ((Get-Date).Hour -ge 17 -and $left.Count -and $PanelConfig.goalsRemindedOn -ne (Get-Today)) {
         $PanelConfig.goalsRemindedOn = Get-Today; Save-PanelConfig $PanelConfig
-        $tray.ShowBalloonTip(6000, 'Mục tiêu hôm nay', "Còn $($left.Count) mục tiêu chưa xong: " + (($left | Select-Object -First 3 | ForEach-Object text) -join ' · '), 'Info')
+        Show-Balloon (6000, 'Mục tiêu hôm nay', "Còn $($left.Count) mục tiêu chưa xong: " + (($left | Select-Object -First 3 | ForEach-Object text) -join ' · '), 'Info')
     }
 }
 Load-Goals
@@ -1269,7 +1269,7 @@ function Update-Health {
         $key = ($w -replace '[\d\.,]+', '#')
         if (-not $script:shownWarn.ContainsKey($key)) {
             $script:shownWarn[$key] = $true
-            $tray.ShowBalloonTip(5000, 'DevOps - Cảnh báo', $w, 'Warning')
+            Show-Balloon (5000, 'DevOps - Cảnh báo', $w, 'Warning')
         }
     }
     foreach ($k in @($script:shownWarn.Keys)) {
@@ -1472,6 +1472,7 @@ function Invoke-AppsBatch([string]$act, $apps) {
     if ($act -notin 'start', 'startseq' -and [System.Windows.Forms.MessageBox]::Show("$verb $($apps.Count) ứng dụng?`n`n$names", 'Ứng dụng', 'YesNo', 'Question') -ne 'Yes') { return }
 
     $script:appsBatchBusy = $true
+    Update-AppMaintenanceButtons
     $form.Cursor = 'AppStarting'
     Set-Status "$verb $($apps.Count) ứng dụng..."
     foreach ($a in $apps) {
@@ -1502,6 +1503,7 @@ function Invoke-AppsBatch([string]$act, $apps) {
     Start-CoreAsync $code @{ Ids = @($apps.Id); Act = $act } {
         param($r, $ctx)
         $script:appsBatchBusy = $false
+        Update-AppMaintenanceButtons
         $form.Cursor = 'Default'
         $appsSync.Kick = $true
         if (-not $r.Ok) { foreach ($id in $ctx.Ids) { $script:appsPending.Remove($id) }; Update-AppsPending; Set-Status "Lỗi: $($r.Value)"; return }
@@ -1676,6 +1678,9 @@ New-Button 'Mở web' 216 304 68 $pageApps { $s = Get-SelectedApps; if ($s) { Op
 New-Button 'Xem log' 288 304 68 $pageApps { $s = Get-SelectedApps; if ($s) { Open-AppLog $s } } | Out-Null
 New-Button 'Gỡ' 360 304 50 $pageApps { Remove-PanelApps (Get-SelectedApps) } | Out-Null
 New-Button 'Quét project' 414 304 96 $pageApps { Invoke-ProjectScan } | Out-Null
+$btnAppNpmInstall = New-Button 'Install package' 516 304 122 $pageApps { $a = @(Get-SelectedApps -Quiet); if ($a.Count -eq 1) { Invoke-AppMaintenance 'npm-install' $a[0] } else { Set-Status 'Hãy chọn đúng một frontend có package.json.' } }
+$btnAppBuild = New-Button 'Build' 642 304 112 $pageApps { $a = @(Get-SelectedApps -Quiet); if ($a.Count -eq 1) { Invoke-AppMaintenance 'dotnet-build' $a[0] } else { Set-Status 'Hãy chọn đúng một app IIS hoặc API .NET 8.' } }
+$btnAppNpmInstall.Enabled = $false; $btnAppBuild.Enabled = $false
 
 # Gỡ app khỏi panel (chỉ bỏ khỏi danh mục, không xoá code). Có thể khôi phục lại.
 function Remove-PanelApps($apps) {
@@ -1799,7 +1804,7 @@ $btnProfiles.Height = 26
 
 # ---------- Cảnh báo ở khay + theo dõi app sập ----------
 function Show-AppAlert([string]$title, [string]$text) {
-    try { $tray.ShowBalloonTip(6000, $title, $text, 'Warning') } catch { }
+    try { Show-Balloon (6000, $title, $text, 'Warning') } catch { }
 }
 # So sánh 2 lần quét: app đang chạy -> tắt mà không do người dùng bấm dừng = sập
 function Watch-AppsCrash($old, $new) {
@@ -1884,7 +1889,7 @@ $tunnelTimer.Add_Tick({
             $t.Url = $m.Value.TrimEnd('/')
             try { [System.Windows.Forms.Clipboard]::SetText($t.Url) } catch { }
             Set-Status "$($t.Name) đã public: $($t.Url) (đã copy link)"
-            try { $tray.ShowBalloonTip(6000, "$($t.Name) đã public ra Internet", "$($t.Url)`nLink đã được copy.", 'Info') } catch { }
+            try { Show-Balloon (6000, "$($t.Name) đã public ra Internet", "$($t.Url)`nLink đã được copy.", 'Info') } catch { }
         } elseif ($t.Proc.HasExited) {
             $script:tunnels.Remove($t.Port)
             $tail = (($txt -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 8) -join "`n"
@@ -1895,16 +1900,233 @@ $tunnelTimer.Add_Tick({
 })
 
 # Menu chuột phải
+
+# ---------- Chia sẻ môi trường test cho Tester (1-click) ----------
+function Invoke-ShareWithTester($targetApp) {
+    $group = if ($targetApp -and $targetApp.Group -and $targetApp.Group -ne 'Khác (đang chạy)') { $targetApp.Group } else { 'HRM' }
+
+    # 1. Dò IP mạng LAN và Tailscale
+    $allIps = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { 
+        $_.InterfaceAlias -notmatch 'vEthernet|Loopback' -and $_.IPAddress -notlike '169.254*' 
+    } | Select-Object -ExpandProperty IPAddress)
+
+    $lanIp = @($allIps | Where-Object { $_ -match '^(172\.(1[6-9]|2[0-9]|3[0-1])|192\.168|10\.)' })[0]
+    if (-not $lanIp) { $lanIp = $allIps[0] }
+    if (-not $lanIp) { $lanIp = 'localhost' }
+
+    $tsIp = @($allIps | Where-Object { $_ -match '^100\.' })[0]
+
+    # 2. Cập nhật .env.local và public/config.js cho Shell
+    $shellDir = "E:\SUNHOUSE\baseapplication\sh.app.projects\sh.app.shell"
+    if (Test-Path $shellDir) {
+        $envLocalPath = Join-Path $shellDir ".env.local"
+        $envContent = @"
+# Tự động sinh bởi PegasusPanel cho Tester
+VITE_API_BASE_URL=https://${lanIp}:7171
+VITE_MFE_HRM=https://${lanIp}:5003/remoteEntry.js
+VITE_MFE_CAMS=https://${lanIp}:5001/remoteEntry.js
+VITE_MFE_SAM=https://${lanIp}:5002/remoteEntry.js
+VITE_MFE_SLS=https://${lanIp}:5004/remoteEntry.js
+"@
+        Set-Content -LiteralPath $envLocalPath -Value $envContent -Encoding UTF8
+
+        $publicCfgPath = Join-Path $shellDir "public\config.js"
+        $cfgContent = @"
+window.__APP_CONFIG__ = {
+  ENABLE_DEV_TOKEN: "true",
+  LOG_LEVEL: "debug",
+  API_BASE_URL: "https://${lanIp}:7171",
+  MFE_HRM: "https://${lanIp}:5003/remoteEntry.js",
+  MFE_CAMS: "https://${lanIp}:5001/remoteEntry.js",
+  MFE_SAM: "https://${lanIp}:5002/remoteEntry.js",
+  MFE_SLS: "https://${lanIp}:5004/remoteEntry.js"
+};
+"@
+        Set-Content -LiteralPath $publicCfgPath -Value $cfgContent -Encoding UTF8
+    }
+
+    # 3. Tự động mở Windows Firewall nếu chưa mở
+    try {
+        $fwRule = Get-NetFirewallRule -DisplayName "Sunhouse Dev Ports" -ErrorAction SilentlyContinue
+        if (-not $fwRule) {
+            New-NetFirewallRule -DisplayName "Sunhouse Dev Ports" -Direction Inbound -LocalPort 5001,5002,5003,5004,5005,5006,5007,7001,7003,7005,7006,7007,7171,7172 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+        }
+    } catch { }
+
+    # 4. Xác định các app cần chạy theo nhóm
+    $requiredIds = switch ($group) {
+        'HRM'   { @('hrm-api', 'app-bff', 'hrm-mfe', 'app-shell') }
+        'ACC'   { @('acc-api', 'app-bff', 'acc-mfe', 'app-shell') }
+        'CAMS'  { @('acc-api', 'app-bff', 'acc-mfe', 'app-shell') }
+        'Sales' { @('sales-api', 'app-bff', 'sales-mfe', 'app-shell') }
+        'SCM'   { @('scm-api', 'app-bff', 'scm-mfe', 'app-shell') }
+        default { @('app-bff', 'hrm-api', 'hrm-mfe', 'app-shell') }
+    }
+
+    $appsCfg = Get-AppsConfig
+    $allApps = @($appsCfg.Apps)
+    $appsToStart = @($allApps | Where-Object { $requiredIds -contains $_.id -and -not (Test-PortBusy $_.port) })
+    
+    if ($appsToStart.Count -gt 0) {
+        Set-Status "Đang tự động khởi động $($appsToStart.Count) app cho nhóm $group..."
+        foreach ($app in $appsToStart) {
+            try { Start-DevApp $app.id | Out-Null } catch { }
+        }
+        $appsSync.Kick = $true
+    }
+
+    # 5. Link cho Tester
+    $lanUrl = "https://${lanIp}:7172"
+    $tsUrl  = if ($tsIp) { "https://${tsIp}:7172" } else { $null }
+
+    # Copy link vào Clipboard
+    try { [System.Windows.Forms.Clipboard]::SetText($lanUrl) } catch { }
+    Set-Status "Đã copy link Tester: $lanUrl"
+
+    # 6. Mở Dialog hiển thị
+    Show-TesterShareDialog $group $lanUrl $tsUrl $lanIp
+}
+
+function Show-TesterShareDialog($group, $lanUrl, $tsUrl, $lanIp) {
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = "Chia sẻ môi trường test cho Tester - Nhóm $group"
+    $dlg.Font = $font; $dlg.Icon = $AppIcon
+    $dlg.Size = New-Object System.Drawing.Size(620, 520); $dlg.StartPosition = 'CenterParent'
+    $dlg.MinimizeBox = $false; $dlg.MaximizeBox = $false; $dlg.FormBorderStyle = 'FixedDialog'
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = "🚀 LINK TEST ĐÃ ĐƯỢC TẠO VÀ COPY VÀO CLIPBOARD!"
+    $lblTitle.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 10.5)
+    $lblTitle.ForeColor = $Theme.Ok
+    $lblTitle.Location = New-Object System.Drawing.Point(18, 14)
+    $lblTitle.Size = New-Object System.Drawing.Size(570, 24)
+    $dlg.Controls.Add($lblTitle)
+
+    # Box 1: LAN Link
+    $lblLan = New-Object System.Windows.Forms.Label
+    $lblLan.Text = "Link mạng nội bộ (Wi-Fi / LAN SUNHOUSE):"
+    $lblLan.Location = New-Object System.Drawing.Point(18, 48); $lblLan.Size = New-Object System.Drawing.Size(570, 20)
+    $dlg.Controls.Add($lblLan)
+
+    $txtLan = New-Object System.Windows.Forms.TextBox
+    $txtLan.Text = $lanUrl; $txtLan.ReadOnly = $true
+    $txtLan.Font = New-Object System.Drawing.Font('Consolas', 10.5, [System.Drawing.FontStyle]::Bold)
+    $txtLan.Location = New-Object System.Drawing.Point(18, 70); $txtLan.Size = New-Object System.Drawing.Size(450, 28)
+    $dlg.Controls.Add($txtLan)
+
+    $btnCopyLan = New-Object System.Windows.Forms.Button
+    $btnCopyLan.Text = "Copy link"
+    $btnCopyLan.Location = New-Object System.Drawing.Point(476, 68); $btnCopyLan.Size = New-Object System.Drawing.Size(110, 30)
+    $btnCopyLan.Add_Click({
+        [System.Windows.Forms.Clipboard]::SetText($lanUrl)
+        Set-Status "Đã copy $lanUrl"
+    }.GetNewClosure())
+    $dlg.Controls.Add($btnCopyLan)
+
+    # Box 2: Tailscale Link (nếu có)
+    $topPos = 110
+    if ($tsUrl) {
+        $lblTs = New-Object System.Windows.Forms.Label
+        $lblTs.Text = "Link mạng từ xa (Tailscale VPN):"
+        $lblTs.Location = New-Object System.Drawing.Point(18, $topPos); $lblTs.Size = New-Object System.Drawing.Size(570, 20)
+        $dlg.Controls.Add($lblTs)
+
+        $txtTs = New-Object System.Windows.Forms.TextBox
+        $txtTs.Text = $tsUrl; $txtTs.ReadOnly = $true
+        $txtTs.Font = New-Object System.Drawing.Font('Consolas', 10)
+        $txtTs.Location = New-Object System.Drawing.Point(18, ($topPos + 22)); $txtTs.Size = New-Object System.Drawing.Size(450, 26)
+        $dlg.Controls.Add($txtTs)
+
+        $btnCopyTs = New-Object System.Windows.Forms.Button
+        $btnCopyTs.Text = "Copy"
+        $btnCopyTs.Location = New-Object System.Drawing.Point(476, ($topPos + 20)); $btnCopyTs.Size = New-Object System.Drawing.Size(110, 28)
+        $btnCopyTs.Add_Click({
+            [System.Windows.Forms.Clipboard]::SetText($tsUrl)
+            Set-Status "Đã copy $tsUrl"
+        }.GetNewClosure())
+        $dlg.Controls.Add($btnCopyTs)
+        $topPos += 60
+    }
+
+    # Box 3: Tin nhắn mẫu gửi Tester
+    $gTip = New-Object System.Windows.Forms.GroupBox
+    $gTip.Text = "Tin nhắn mẫu gửi Tester (kèm lưu ý chứng chỉ SSL lần đầu)"
+    $gTip.Location = New-Object System.Drawing.Point(18, $topPos); $gTip.Size = New-Object System.Drawing.Size(568, 190)
+    
+    $txtMsg = New-Object System.Windows.Forms.TextBox
+    $txtMsg.Multiline = $true; $txtMsg.ReadOnly = $true; $txtMsg.ScrollBars = 'Vertical'
+    $txtMsg.Location = New-Object System.Drawing.Point(14, 24); $txtMsg.Size = New-Object System.Drawing.Size(540, 115)
+    $shareMsg = @"
+Chào bạn, link test tính năng $group (SuperApp):
+👉 $lanUrl
+
+Lưu ý (chỉ lần đầu tiên khi mở link):
+Nếu trình duyệt báo "Kết nối không an toàn" (Your connection is not private):
+Bạn chỉ cần click "Nâng cao" (Advanced) -> Chọn "Tiếp tục truy cập $lanIp (không an toàn)" là vào test bình thường nhé!
+"@
+    $txtMsg.Text = $shareMsg
+    $gTip.Controls.Add($txtMsg)
+
+    $btnCopyMsg = New-Object System.Windows.Forms.Button
+    $btnCopyMsg.Text = "📋 Copy toàn bộ tin nhắn để gửi Tester (Zalo / Slack / Teams)"
+    $btnCopyMsg.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 9.5)
+    $btnCopyMsg.Location = New-Object System.Drawing.Point(14, 146); $btnCopyMsg.Size = New-Object System.Drawing.Size(540, 32)
+    $btnCopyMsg.Add_Click({
+        [System.Windows.Forms.Clipboard]::SetText($shareMsg)
+        Set-Status "Đã copy toàn bộ tin nhắn gửi Tester vào Clipboard!"
+        [System.Windows.Forms.MessageBox]::Show("Đã copy toàn bộ tin nhắn!`nBạn chỉ cần dán (Ctrl+V) vào Zalo/Slack gửi Tester.", 'Chia sẻ cho Tester', 'OK', 'Information') | Out-Null
+    }.GetNewClosure())
+    $gTip.Controls.Add($btnCopyMsg)
+    $dlg.Controls.Add($gTip)
+
+    # Bottom Buttons
+    $btnOpen = New-Object System.Windows.Forms.Button
+    $btnOpen.Text = "Mở thử trên trình duyệt"
+    $btnOpen.Location = New-Object System.Drawing.Point(18, ($topPos + 205)); $btnOpen.Size = New-Object System.Drawing.Size(180, 34)
+    $btnOpen.Add_Click({ Start-Process $lanUrl }.GetNewClosure())
+    $dlg.Controls.Add($btnOpen)
+
+    $btnClose = New-Object System.Windows.Forms.Button
+    $btnClose.Text = "Đóng"
+    $btnClose.DialogResult = 'Cancel'
+    $btnClose.Location = New-Object System.Drawing.Point(476, ($topPos + 205)); $btnClose.Size = New-Object System.Drawing.Size(110, 34)
+    $dlg.Controls.Add($btnClose)
+
+    $dlg.CancelButton = $btnClose
+    Set-ControlTheme $dlg $Theme $Theme
+    $dlg.Add_Shown({ param($s, $e) Set-NativeTheme $s })
+    $dlg.ShowDialog($form) | Out-Null
+}
+
 $appsMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$script:appsContextTarget = $null
+$script:appsContextTargetPending = $false
 $miAppStart   = $appsMenu.Items.Add('Start', $null, { Invoke-AppsBatch 'start' (Get-SelectedApps) })
 $miAppStop    = $appsMenu.Items.Add('Stop', $null, { Invoke-AppsBatch 'stop' (Get-SelectedApps) })
 $miAppRestart = $appsMenu.Items.Add('Restart', $null, { Invoke-AppsBatch 'restart' (Get-SelectedApps) })
+[void]$appsMenu.Items.Add('-')
+$miAppNpmInstall = $appsMenu.Items.Add('Install package (npm install)', $null, {
+    $app = $script:appsContextTarget
+    if (-not $app) { $app = @(Get-SelectedApps)[0] }
+    if ($app) { Invoke-AppMaintenance 'npm-install' $app }
+})
+$miAppDotnetBuild = $appsMenu.Items.Add('Build solution / API .NET 8 (dotnet build)', $null, {
+    $app = $script:appsContextTarget
+    if (-not $app) { $app = @(Get-SelectedApps)[0] }
+    if ($app) { Invoke-AppMaintenance 'dotnet-build' $app }
+})
 [void]$appsMenu.Items.Add('-')
 $miAppWeb     = $appsMenu.Items.Add('Mở web', $null, { Open-AppWeb (Get-SelectedApps) })
 $miAppLog     = $appsMenu.Items.Add('Xem log', $null, { Open-AppLog (Get-SelectedApps) })
 $miTunnel     = $appsMenu.Items.Add('Public ra Internet', $null, { Start-AppTunnel @(Get-SelectedApps)[0] })
 $miTunnelCopy = $appsMenu.Items.Add('Copy link public', $null, { $t = $script:tunnels[[int]@(Get-SelectedApps)[0].Port]; if ($t.Url) { [System.Windows.Forms.Clipboard]::SetText($t.Url); Set-Status "Đã copy $($t.Url)" } })
 $miTunnelStop = $appsMenu.Items.Add('Dừng public', $null, { Stop-AppTunnel ([int]@(Get-SelectedApps)[0].Port) })
+[void]$appsMenu.Items.Add('-')
+$miTesterShare = $appsMenu.Items.Add('🚀 Chia sẻ link cho Tester (1-click)', $null, {
+    $target = if ($script:appsContextTarget) { $script:appsContextTarget } elseif (@(Get-SelectedApps).Count -gt 0) { @(Get-SelectedApps)[0] } else { $null }
+    Invoke-ShareWithTester $target
+})
+$miTesterShare.Font = New-Object System.Drawing.Font($appsMenu.Font, [System.Drawing.FontStyle]::Bold)
 [void]$appsMenu.Items.Add('-')
 $miAppFolder  = $appsMenu.Items.Add('Mở thư mục project', $null, { foreach ($a in Get-SelectedApps) { $d = Get-AppFolder $a; if ($d) { Start-Process explorer.exe "`"$d`"" } } })
 $miAppTerm    = $appsMenu.Items.Add('Mở terminal tại thư mục', $null, {
@@ -1977,15 +2199,73 @@ function Set-AppsStatsVisible([bool]$on) {
 }
 $miAppStart.Font = New-Object System.Drawing.Font($appsMenu.Font, [System.Drawing.FontStyle]::Bold)
 
+function Test-AppBuildSupported($app) {
+    if (-not $app -or -not $app.Known) { return $false }
+    if ($app.Iis) { return $true }
+    if ($app.Type -ne 'backend' -or -not $app.Dir) { return $false }
+    try { $null = Get-DevAppNet8Project $app.Dir; return $true } catch { return $false }
+}
+function Update-AppMaintenanceButtons {
+    $sel = @(Get-SelectedApps -Quiet); $single = if ($sel.Count -eq 1) { $sel[0] } else { $null }
+    $btnAppNpmInstall.Enabled = [bool]($single -and $single.Known -and $single.Dir -and (Test-Path -LiteralPath (Join-Path $single.Dir 'package.json') -PathType Leaf)) -and -not $script:appsBatchBusy
+    $btnAppBuild.Enabled = (Test-AppBuildSupported $single) -and -not $script:appsBatchBusy
+}
+$lvApps.Add_SelectedIndexChanged({ Update-AppMaintenanceButtons })
+
+function Invoke-AppMaintenance([string]$task, $app) {
+    if (-not $app -or -not $app.Known) { Set-Status 'Hãy chọn một app trong danh mục.'; return }
+    if ($script:appsBatchBusy) { Set-Status 'Lệnh trước vẫn đang chạy, chờ chút rồi thử lại.'; return }
+    if ($task -eq 'npm-install' -and (-not $app.Dir -or -not (Test-Path -LiteralPath (Join-Path $app.Dir 'package.json') -PathType Leaf))) { Set-Status 'Không tìm thấy package.json trong thư mục project.'; return }
+    if ($task -eq 'dotnet-build' -and -not (Test-AppBuildSupported $app)) { Set-Status 'Build chỉ hỗ trợ app IIS hoặc API backend .NET 8.'; return }
+    $verb = if ($task -eq 'npm-install') { 'Install package' } elseif ($app.Iis) { 'Build solution IIS' } else { 'Build API .NET 8' }
+    $stopFirst = $task -eq 'dotnet-build' -and $app.Running
+    $message = "$verb cho $($app.Name)?`n`nLệnh chạy trong thư mục project; kết quả được lưu trong log của ứng dụng."
+    if ($stopFirst) { $message += "`n`nỨng dụng đang chạy. Dừng để build rồi tự khởi động lại sau khi build xong?" }
+    if ([System.Windows.Forms.MessageBox]::Show($message, $verb, 'YesNo', $(if ($stopFirst) { 'Warning' } else { 'Question' })) -ne 'Yes') { return }
+    $script:appsBatchBusy = $true; $form.Cursor = 'AppStarting'; Set-Status "$verb đang chạy cho $($app.Name)..."
+    Update-AppMaintenanceButtons
+    $maintenanceCode = @'
+if (-not $p.StopFirst) { Invoke-DevAppMaintenanceTask $p.Id $p.Task; return }
+Stop-DevApp $p.Id | Out-Null
+$buildResult = $null; $buildError = $null; $restartResult = $null; $restartError = $null
+try { $buildResult = Invoke-DevAppMaintenanceTask $p.Id $p.Task } catch { $buildError = $_.Exception.Message }
+try { $restartResult = Start-DevApp $p.Id } catch { $restartError = $_.Exception.Message }
+if ($buildError) {
+    if ($restartError) { throw "$buildError`nKhởi động lại cũng lỗi: $restartError" }
+    throw "$buildError`nĐã tự khởi động lại ứng dụng."
+}
+if ($restartError) { throw "$buildResult`nBuild xong nhưng khởi động lại lỗi: $restartError" }
+"$buildResult`n$restartResult"
+'@
+    Start-CoreAsync $maintenanceCode @{ Id = $app.Id; Task = $task; StopFirst = $stopFirst } {
+        param($r, $ctx)
+        $script:appsBatchBusy = $false; $form.Cursor = 'Default'; $appsSync.Kick = $true; Update-AppMaintenanceButtons
+        if ($r.Ok) { Set-Status [string]$r.Value }
+        else {
+            Set-Status "Lỗi: $($r.Value)"
+            [System.Windows.Forms.MessageBox]::Show([string]$r.Value, 'Bảo trì ứng dụng', 'OK', 'Warning') | Out-Null
+        }
+    }
+}
+
 $appsMenu.Add_Opening({
     param($s, $e)
     $sel = @(Get-SelectedApps -Quiet)
     $n = $sel.Count
     $suffix = if ($n -gt 1) { " ($n app)" } else { '' }
+    if ($script:appsContextTargetPending) { $script:appsContextTargetPending = $false }
+    else { $script:appsContextTarget = if ($n -eq 1) { $sel[0] } else { $null } }
+    $maintenanceApp = $script:appsContextTarget
     $canStart = @($sel | Where-Object { $_.Known -and -not $_.Running -and -not $script:appsPending[$_.Id] }).Count
     $miAppStart.Text = "Start$suffix";   $miAppStart.Enabled = [bool]$canStart
     $miAppStop.Text = "Stop$suffix";     $miAppStop.Enabled = [bool]@($sel | Where-Object { $_.Running -or $_.Known }).Count
     $miAppRestart.Text = "Restart$suffix"; $miAppRestart.Enabled = [bool]@($sel | Where-Object Known).Count
+    $single = if ($n -eq 1) { $sel[0] } else { $null }
+    $miAppNpmInstall.Visible = [bool]($maintenanceApp -and $maintenanceApp.Known -and $maintenanceApp.Dir -and (Test-Path -LiteralPath (Join-Path $maintenanceApp.Dir 'package.json') -PathType Leaf))
+    $miAppNpmInstall.Enabled = $miAppNpmInstall.Visible -and -not $script:appsBatchBusy
+    $miAppDotnetBuild.Visible = [bool](Test-AppBuildSupported $maintenanceApp)
+    $miAppDotnetBuild.Enabled = $miAppDotnetBuild.Visible -and -not $script:appsBatchBusy
+    Update-AppMaintenanceButtons
     $miAppWeb.Enabled = [bool]@($sel | Where-Object Url).Count
     $miAppLog.Enabled = [bool]$n
     $tun = if ($n -eq 1 -and $sel[0].Port) { $script:tunnels[[int]$sel[0].Port] } else { $null }
@@ -2032,8 +2312,23 @@ $appsMenu.Add_Opening({
         $miGroupSel.Text = "Chọn cả nhóm $($script:menuGroup)"
         $miGroupStart.Enabled = -not $script:appsBatchBusy; $miGroupStop.Enabled = -not $script:appsBatchBusy
     }
+    $miTesterShare.Visible = $true
+    $miTesterShare.Enabled = -not $script:appsBatchBusy
+    if ($okGroup) {
+        $miTesterShare.Text = "🚀 Chia sẻ nhóm $($script:menuGroup) cho Tester (1-click)"
+    } else {
+        $miTesterShare.Text = "🚀 Chia sẻ link cho Tester (1-click)"
+    }
 })
 $lvApps.ContextMenuStrip = $appsMenu
+$lvApps.Add_MouseDown({
+    param($sender, $e)
+    if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Right) { return }
+    $point = New-Object System.Drawing.Point($e.X, $e.Y)
+    $item = $sender.GetItemAt($point.X, $point.Y)
+    $script:appsContextTarget = if ($item) { $item.Tag } else { $null }
+    $script:appsContextTargetPending = $true
+})
 $lvApps.Add_KeyDown({
     param($s, $e)
     if ($e.Control -and $e.KeyCode -eq 'A') { foreach ($it in $lvApps.Items) { $it.Selected = $true }; $e.Handled = $true }
@@ -2336,7 +2631,7 @@ $tabs.Add_SelectedIndexChanged({
     Sync-HealthMode; $script:lastSeq = -1; Update-Health
     if ($tabs.SelectedTab -eq $pageK3s)  { $k3sSync.Kick = $true }
     if ($tabs.SelectedTab -eq $pageApps) { $appsSync.Kick = $true; Render-Apps }
-    if ($tabs.SelectedTab -eq $pageGit -and -not $script:reposLoaded) { Load-Repos }
+    if ($tabs.SelectedTab -eq $pageGit) { if (-not $script:reposLoaded) { Load-Repos } else { Update-GitTabBrowser } }
     if ($tabs.SelectedTab -eq $pageAi) { Enter-AiTab }
 })
 $form.Add_VisibleChanged({ Sync-HealthMode })
@@ -2389,7 +2684,7 @@ function Render-Repos {
         foreach ($it in $lvRepos.Items) { $it.Selected = (@($it.Tag.Apps -split ', ') -contains $script:gitWantApp) }
         $first = @($lvRepos.SelectedItems)[0]; if ($first) { $first.EnsureVisible(); $first.Focused = $true }
     }
-    if ($script:gitRepoPicker) { Sync-GitRepoPicker }
+    if ($script:gitRepoPicker) { Sync-GitRepoPicker; Update-GitTabBrowser }
     $script:gitWantApp = $null
     Update-RepoLog -Force
 }
@@ -2433,7 +2728,11 @@ function Invoke-ReposAction([string]$code, [hashtable]$params, [string]$title, $
 function Show-PullMainPicker {
     if ($script:reposBusy) { Set-Status 'Git đang chạy lệnh khác, chờ chút.'; return }
     $all = @($script:repos | Where-Object IsRepo | Sort-Object Name)
-    if (-not $all.Count) { Set-Status 'Chưa có repo nào - bấm "Quét repo" trước.'; if (-not $script:reposLoaded) { Load-Repos }; return }
+    if (-not $all.Count) {
+        if (-not $script:reposLoaded) { Set-Status 'Đang quét danh sách repo; bấm Pull main lần nữa sau khi quét xong.'; Load-Repos }
+        else { Set-Status 'Chưa tìm thấy repo Git - thêm thư mục ở tab Cài đặt rồi bấm "Quét repo".' }
+        return
+    }
     $d = New-Object System.Windows.Forms.Form
     $d.Text = 'Pull main - chọn repo'; $d.Icon = $AppIcon; $d.Font = $font; $d.StartPosition = 'CenterParent'
     $d.Size = New-Object System.Drawing.Size(620, 560); $d.MinimumSize = New-Object System.Drawing.Size(480, 360); $d.MinimizeBox = $false; $d.MaximizeBox = $false
@@ -4899,7 +5198,7 @@ function Complete-AiRun {
             Open-AiTerminal        # Claude Code tương tác: chưa đăng nhập / phiên hết hạn thì nó hiện bước đăng nhập
         }
     }
-    if (-not $form.ContainsFocus) { $tray.ShowBalloonTip(4000, $r.Name, 'Đã trả lời xong.', 'Info') }
+    if (-not $form.ContainsFocus) { Show-Balloon (4000, $r.Name, 'Đã trả lời xong.', 'Info') }
 }
 $aiTimer = New-Object System.Windows.Forms.Timer
 $aiTimer.Interval = 150
@@ -4976,6 +5275,11 @@ $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = $AppIcon
 $tray.Text = $(if ($AppName.Length -gt 60) { $AppName.Substring(0, 60) } else { $AppName })
 $tray.Visible = $true
+# Bóng thông báo ở khay: tham số là mảng (ms, tiêu đề, nội dung, loại); bỏ qua khi người dùng tắt thông báo
+function Show-Balloon([object[]]$a) {
+    if ($PanelConfig.notifications -eq $false) { return }
+    $tray.ShowBalloonTip([int]$a[0], [string]$a[1], [string]$a[2], [string]$a[3])
+}
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 [void]$menu.Items.Add('Mở panel', $null, { $form.Show(); $form.WindowState = 'Normal'; $form.Activate() })
 if ($Distro) {
@@ -4984,6 +5288,14 @@ if ($Distro) {
     [void]$menu.Items.Add('Mở k9s', $null, { Start-Ubuntu; Open-UbuntuTerminal '-u root -e env KUBECONFIG=/etc/rancher/k3s/k3s.yaml k9s' })
 }
 [void]$menu.Items.Add('-')
+$miTrayNotify = New-Object System.Windows.Forms.ToolStripMenuItem('Hiện thông báo')
+$miTrayNotify.CheckOnClick = $true
+$miTrayNotify.Checked = ($PanelConfig.notifications -ne $false)
+$miTrayNotify.Add_Click({
+    $PanelConfig.notifications = [bool]$miTrayNotify.Checked
+    try { Save-PanelConfig $PanelConfig } catch { }
+})
+[void]$menu.Items.Add($miTrayNotify)
 $miTrayUpd = $menu.Items.Add('Cập nhật', $null, { $form.Show(); $form.WindowState = 'Normal'; $form.Activate(); Show-UpdateDialog })
 $miTrayUpd.Available = $false
 [void]$menu.Items.Add("Trợ giúp (v$PanelVersion)", $null, { $form.Show(); $form.WindowState = 'Normal'; $tabs.SelectedTab = $pageHelp; $form.Activate() })
@@ -5347,7 +5659,7 @@ function Update-UpdateUi {
         $miTrayUpd.Text = "⬆ Cập nhật lên $($r.Version)…"; $miTrayUpd.Available = $true
         if (-not $script:updNotified) {
             $script:updNotified = $true
-            $tray.ShowBalloonTip(6000, "$AppName - có bản mới $($r.Version)", "Đang dùng $PanelVersion. Bấm link dưới cùng cửa sổ hoặc tab Trợ giúp để cập nhật.", 'Info')
+            Show-Balloon (6000, "$AppName - có bản mới $($r.Version)", "Đang dùng $PanelVersion. Bấm link dưới cùng cửa sổ hoặc tab Trợ giúp để cập nhật.", 'Info')
         }
     } else {
         $statusLbl.Width = $form.ClientSize.Width - $statusLbl.Left - 16
@@ -5447,7 +5759,7 @@ $form.Add_FormClosing({
     if (-not $script:exiting -and $e.CloseReason -eq 'UserClosing') {
         $e.Cancel = $true
         $form.Hide()
-        $tray.ShowBalloonTip(2000, 'Develop Workspace', 'Panel vẫn chạy ở khay hệ thống. Chuột phải để Thoát.', 'Info')
+        Show-Balloon (2000, 'Develop Workspace', 'Panel vẫn chạy ở khay hệ thống. Chuột phải để Thoát.', 'Info')
     }
     if (-not $e.Cancel) { foreach ($port in @($script:tunnels.Keys)) { Stop-AppTunnel $port } }
 })

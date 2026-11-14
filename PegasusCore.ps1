@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.10'
+$PanelVersion = '1.0.11'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 
@@ -34,7 +34,8 @@ function Get-PanelConfig {
         aiSessions      = @()         # các phiên AI gần đây, nhóm theo thư mục
         navLayout       = 'top'       # menu tab: top = trên dải tiêu đề, side = thanh bên trái
         navCollapsed    = $false      # thanh bên trái thu gọn chỉ còn icon
-        noLockOnSleep   = $false      # không yêu cầu đăng nhập sau khi thức dậy
+        notifications   = $true       # hiện bóng thông báo ở khay hệ thống; tắt thì không báo gì
+        noLockOnSleep   = $false     # không yêu cầu đăng nhập sau khi thức dậy
     }
     if (Test-Path $ConfigFile) {
         $j = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1105,6 +1106,87 @@ function Get-DevAppLog([string]$id, [int]$tail = 200) {
     $log = Join-Path $AppsLogDir "$id.log"
     if (-not (Test-Path $log)) { return '(Chưa có log - app này chưa được khởi động từ panel)' }
     (Get-Content $log -Tail ([math]::Min([math]::Max($tail, 10), 2000)) -Encoding UTF8) -join "`n"
+}
+
+function Test-ReactProject([string]$packageJson) {
+    if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) { return $false }
+    try { $pkg = Get-Content -LiteralPath $packageJson -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $false }
+    foreach ($group in 'dependencies', 'devDependencies', 'peerDependencies') {
+        if ($pkg.$group -and $pkg.$group.PSObject.Properties['react']) { return $true }
+    }
+    return $false
+}
+
+function Get-DevAppNet8Project([string]$dir) {
+    $projects = @(Get-ChildItem -LiteralPath $dir -File -Filter '*.csproj' -ErrorAction SilentlyContinue)
+    if ($projects.Count -gt 1) { throw "Có nhiều file .csproj trong '$dir'; hãy đặt app.dir tại thư mục project cần build." }
+    if (-not $projects.Count) { throw "Không tìm thấy file .csproj trong '$dir'." }
+    try {
+        [xml]$project = Get-Content -LiteralPath $projects[0].FullName -Raw -Encoding UTF8
+        $frameworks = @($project.SelectNodes("//*[local-name()='TargetFramework'] | //*[local-name()='TargetFrameworks']") | ForEach-Object { $_.InnerText -split ';' })
+    } catch { throw "Không đọc được project '$($projects[0].Name)': $($_.Exception.Message)" }
+    if ($frameworks -notcontains 'net8.0') { throw "Project '$($projects[0].Name)' không target net8.0." }
+    $projects[0].FullName
+}
+
+function Get-DevAppSolution([string]$dir) {
+    $current = (Resolve-Path -LiteralPath $dir).Path
+    $projectNames = @(Get-ChildItem -LiteralPath $current -File -Filter '*.csproj' -ErrorAction SilentlyContinue | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name) })
+    $projectNames += Split-Path $current -Leaf
+    while ($current) {
+        $solutions = @(Get-ChildItem -LiteralPath $current -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.sln', '.slnx' })
+        if ($solutions.Count -gt 1) {
+            $matching = @($solutions | Where-Object { $projectNames -contains [IO.Path]::GetFileNameWithoutExtension($_.Name) })
+            if ($matching.Count -eq 1) { return $matching[0].FullName }
+            if ($matching.Count -gt 1) { throw "Có nhiều solution cùng tên với project trong '$current'; hãy chọn solution cần build." }
+            throw "Có nhiều solution trong '$current' nhưng không xác định được solution của project '$dir'."
+        }
+        if ($solutions.Count -eq 1) { return $solutions[0].FullName }
+        $parent = Split-Path $current -Parent
+        if (-not $parent -or $parent -eq $current) { break }
+        $current = $parent
+    }
+    throw "Không tìm thấy file .sln hoặc .slnx từ thư mục '$dir' trở lên."
+}
+
+function Invoke-DevAppMaintenanceTask([string]$id, [ValidateSet('npm-install', 'dotnet-build')][string]$task) {
+    if ($id -notmatch '^[a-z0-9-]+$') { throw 'id ứng dụng không hợp lệ' }
+    $app = (Get-AppsConfig).Apps | Where-Object id -eq $id | Select-Object -First 1
+    if (-not $app -or -not (Test-Path -LiteralPath $app.dir -PathType Container)) { throw "Không tìm thấy thư mục project của '$id'." }
+
+    if ($task -eq 'npm-install') {
+        $packageJson = Join-Path $app.dir 'package.json'
+        if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) { throw 'Không tìm thấy package.json trong thư mục project.' }
+        $exe = Join-Path $env:WINDIR 'System32\cmd.exe'; $args = '/d /c npm install'; $label = 'npm install'
+    } else {
+        if ($app.iis) {
+            $target = Get-DevAppSolution $app.dir
+            $label = 'dotnet build solution'
+        } elseif ($app.type -eq 'backend') {
+            $target = Get-DevAppNet8Project $app.dir
+            $label = 'dotnet build API .NET 8'
+        } else { throw 'Build chỉ hỗ trợ app IIS hoặc API backend .NET 8.' }
+        $exe = (Get-Command dotnet.exe -ErrorAction Stop).Source
+        $args = 'build "' + $target + '"'
+    }
+
+    New-Item -ItemType Directory -Force $AppsLogDir | Out-Null
+    $log = Join-Path $AppsLogDir "$id-$task.log"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe; $psi.Arguments = $args; $psi.WorkingDirectory = $app.dir
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $process = New-Object System.Diagnostics.Process; $process.StartInfo = $psi
+    try {
+        if (-not $process.Start()) { throw "Không khởi chạy được $label." }
+        $outTask = $process.StandardOutput.ReadToEndAsync(); $errTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $output = @("$label`r`nProject: $($app.dir)", $outTask.Result, $errTask.Result) -join "`r`n"
+        Set-Content -LiteralPath $log -Value $output -Encoding UTF8
+        if ($process.ExitCode -ne 0) { throw "$label thất bại (exit $($process.ExitCode)); xem log: $log" }
+    } finally { $process.Dispose() }
+    "$label hoàn tất; log: $log"
 }
 
 # ---------- Git của project ----------

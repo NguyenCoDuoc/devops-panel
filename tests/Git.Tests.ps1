@@ -5,8 +5,8 @@ Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode('ThrowException')
 . (Join-Path $PSScriptRoot 'Theme.Tests.ps1')
 . (Join-Path $root 'ui/TabGit.ps1')
-$null = Import-Functions (Join-Path $root 'PegasusCore.ps1') @('Invoke-Git', 'Get-RepoBranches', 'Get-RepoChanges', 'Get-RepoCommits', 'Get-CommitDetail', 'Get-CommitFileDiff', 'Get-WorkingDiff', 'Invoke-RepoStage', 'Invoke-RepoCommit', 'Get-RepoBrowserData', 'Get-RepoFileTree', 'Get-RepoFileContent', 'Get-RepoGitInfo', 'Hide-UrlSecret')
-$null = Import-Functions (Join-Path $root 'PegasusPanel.ps1') @('Show-GitBrowser', 'New-GitListView', 'New-RtbView', 'New-ToolButton', 'Get-CodeColor', 'Get-LanePen', 'Fill-CommitList', 'GitB-SetStatus', 'GitB-Refresh', 'GitB-LoadCommits', 'GitB-ShowCommit', 'GitB-ShowFileDiff', 'GitB-Checkout', 'Show-DiffText', 'Show-CommitDialog', 'Update-CommitChanges', 'Show-CommitFileDiff', 'Set-CommitStatus', 'Invoke-CommitStage', 'Invoke-CommitNow', 'Get-SelectedRepos', 'Set-DoubleBuffered', 'ConvertTo-NoDiacritics')
+$null = Import-Functions (Join-Path $root 'PegasusCore.ps1') @('Invoke-Git', 'Get-RepoBranches', 'Get-RepoChanges', 'Get-RepoCommits', 'Get-CommitDetail', 'Get-CommitFileDiff', 'Get-WorkingDiff', 'Invoke-RepoStage', 'Invoke-RepoCommit', 'Get-RepoBrowserData', 'Get-RepoFileTree', 'Get-RepoFileContent', 'Get-RepoGitInfo', 'Hide-UrlSecret', 'Test-ReactProject', 'Get-DevAppSolution')
+$null = Import-Functions (Join-Path $root 'PegasusPanel.ps1') @('Show-GitBrowser', 'New-GitListView', 'New-RtbView', 'New-ToolButton', 'Get-CodeColor', 'Get-LanePen', 'Fill-CommitList', 'GitB-SetStatus', 'GitB-Refresh', 'GitB-LoadCommits', 'GitB-ShowCommit', 'GitB-ShowFileDiff', 'GitB-Checkout', 'Show-DiffText', 'Show-CommitDialog', 'New-CommitFileMenu', 'Update-CommitChanges', 'Show-CommitFileDiff', 'Set-CommitStatus', 'Invoke-CommitStage', 'Invoke-CommitNow', 'Get-SelectedRepos', 'Set-DoubleBuffered', 'ConvertTo-NoDiacritics')
 $start = $panelSource.IndexOf('$script:gitWindows ='); $end = $panelSource.IndexOf('function Show-DiffText', $start)
 . ([scriptblock]::Create($panelSource.Substring($start, $end - $start)))
 $start = $panelSource.IndexOf('$script:lanePens ='); $end = $panelSource.IndexOf('# Đổ danh sách commit', $start)
@@ -14,6 +14,15 @@ $start = $panelSource.IndexOf('$script:lanePens ='); $end = $panelSource.IndexOf
 $GitExe = (Get-Command git.exe).Source
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('PegasusGitTest-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory $scratch
+$reactDir = Join-Path $scratch 'react'; $null = New-Item -ItemType Directory $reactDir
+'{"dependencies":{"react":"^18.0.0"}}' | Set-Content (Join-Path $reactDir 'package.json') -Encoding UTF8
+Assert (Test-ReactProject (Join-Path $reactDir 'package.json')) 'React package detection'
+'{"dependencies":{"vue":"^3.0.0"}}' | Set-Content (Join-Path $reactDir 'package.json') -Encoding UTF8
+Assert (-not (Test-ReactProject (Join-Path $reactDir 'package.json'))) 'Do not offer npm install as React action to other frontends'
+$solutionRoot = Join-Path $scratch 'solution'; $solutionApp = Join-Path $solutionRoot 'src\web'
+$null = New-Item -ItemType Directory $solutionApp -Force
+'Microsoft Visual Studio Solution File' | Set-Content (Join-Path $solutionRoot 'web.sln') -Encoding UTF8
+Assert ((Get-DevAppSolution $solutionApp) -eq (Join-Path $solutionRoot 'web.sln')) 'Find solution above IIS project directory'
 $repoRoot = Join-Path $scratch 'demo'; $otherRoot = Join-Path $scratch 'other'
 function Run-Git($dir, $arguments) { $r = Invoke-Git $dir $arguments; Assert ($r.Code -eq 0) $r.Err; $r.Out }
 foreach ($dir in $repoRoot, $otherRoot) {
@@ -156,7 +165,9 @@ try {
     $standalone = $script:gitWindows[$otherRoot]
     Assert ($standalone.Tag.Rows.Count -eq 1 -and $standalone.Tag.Details.TabPages.Count -eq 4) 'Standalone browser callers still work'
     $standalone.Close(); $standalone.Dispose()
-    Write-Host 'PASS: Git graph, merge, ref navigation, pending/index diffs, file tree, search, repo switching, stale callbacks, toolbar layout, stage and commit on temporary repositories.'
+    $script:repos = @(); $script:reposLoaded = $true; Sync-GitRepoPicker; Update-GitTabBrowser
+    Assert (-not $script:gitTabBrowser -and $script:gitEmptyState.Text -like '*Chưa có repository Git*') 'Git tab shows an empty state when no repository is selected'
+    Write-Host 'PASS: Git browser and empty state, React task detection, solution discovery, merge, ref navigation, pending/index diffs, file tree, search, repo switching, stale callbacks, toolbar layout, stage and commit on temporary repositories.'
 } finally {
     $form.Close(); $form.Dispose()
     # Both targets are unique temporary repositories created above.
