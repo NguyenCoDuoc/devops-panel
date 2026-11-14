@@ -2,7 +2,7 @@
 $env:WSL_UTF8 = '1'
 
 # Phiên bản: chỉ sửa ở đây - build-setup.ps1 đọc số này để ghi vào exe, bộ cài và mục gỡ cài đặt
-$PanelVersion = '1.0.11'
+$PanelVersion = '1.0.12'
 $SupportEmail = 'coduoc2502@gmail.com'
 $UpdateRepo   = 'NguyenCoDuoc/devops-panel'      # kiểm tra bản mới qua GitHub Releases
 

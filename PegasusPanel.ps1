@@ -3844,7 +3844,18 @@ $chkNoLockSleep.Add_CheckedChanged({
         [System.Windows.Forms.MessageBox]::Show("Không đổi được cài đặt khóa sau Sleep:`n$($_.Exception.Message)", 'Cài đặt Sleep', 'OK', 'Warning') | Out-Null
     }
 })
+$chkNotify = New-Object System.Windows.Forms.CheckBox
+$chkNotify.Location = New-Object System.Drawing.Point(390, 27); $chkNotify.Size = New-Object System.Drawing.Size(115, 26)
+$chkNotify.Text = 'Hiện thông báo'; $chkNotify.Checked = ($PanelConfig.notifications -ne $false)
+$gGeneral.Controls.Add($chkNotify)
+$chkNotify.Add_CheckedChanged({
+    $PanelConfig.notifications = [bool]$chkNotify.Checked
+    try { Save-PanelConfig $PanelConfig } catch { }
+    if ($miTrayNotify -and $miTrayNotify.Checked -ne $chkNotify.Checked) { $miTrayNotify.Checked = $chkNotify.Checked }
+    Set-Status $(if ($chkNotify.Checked) { 'Đã bật thông báo ở khay hệ thống.' } else { 'Đã tắt thông báo ở khay hệ thống.' })
+})
 $sleepLockTip = New-Object System.Windows.Forms.ToolTip
+$sleepLockTip.SetToolTip($chkNotify, 'Bật/tắt bóng thông báo ở khay hệ thống (mục tiêu, cảnh báo, có bản mới...).')
 $sleepLockTip.SetToolTip($chkNoLockSleep, 'Bật: không yêu cầu đăng nhập sau khi thức dậy. Tắt: giữ hành vi khóa hiện tại của Windows.')
 
 $gAppearance = New-Group 'Giao diện & màu sắc' 122 160 $pageSettings
@@ -5294,6 +5305,7 @@ $miTrayNotify.Checked = ($PanelConfig.notifications -ne $false)
 $miTrayNotify.Add_Click({
     $PanelConfig.notifications = [bool]$miTrayNotify.Checked
     try { Save-PanelConfig $PanelConfig } catch { }
+    if ($chkNotify.Checked -ne $miTrayNotify.Checked) { $chkNotify.Checked = $miTrayNotify.Checked }
 })
 [void]$menu.Items.Add($miTrayNotify)
 $miTrayUpd = $menu.Items.Add('Cập nhật', $null, { $form.Show(); $form.WindowState = 'Normal'; $form.Activate(); Show-UpdateDialog })
