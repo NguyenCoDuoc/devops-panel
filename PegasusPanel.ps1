@@ -1080,6 +1080,19 @@ $chkAuto.Checked = $settings.autoStartUbuntu
 $chkAuto.Add_CheckedChanged({ $settings.autoStartUbuntu = $chkAuto.Checked; Save-Settings $settings })
 $form.Controls.Add($chkAuto)
 
+$chkNotify = New-Object System.Windows.Forms.CheckBox
+$chkNotify.Text = 'Hiện thông báo'
+$chkNotify.Location = New-Object System.Drawing.Point(520, 552)
+$chkNotify.AutoSize = $true
+$chkNotify.Checked = ($PanelConfig.notifications -ne $false)
+$chkNotify.Add_CheckedChanged({
+    $PanelConfig.notifications = [bool]$chkNotify.Checked
+    try { Save-PanelConfig $PanelConfig } catch { }
+    if ($miTrayNotify -and $miTrayNotify.Checked -ne $chkNotify.Checked) { $miTrayNotify.Checked = $chkNotify.Checked }
+    Set-Status $(if ($chkNotify.Checked) { 'Đã bật thông báo ở khay hệ thống.' } else { 'Đã tắt thông báo ở khay hệ thống.' })
+})
+$form.Controls.Add($chkNotify)
+
 $statusLbl = New-Object System.Windows.Forms.Label
 $statusLbl.Location = New-Object System.Drawing.Point(16, 582)
 $statusLbl.Size = New-Object System.Drawing.Size(516, 22)
@@ -3844,18 +3857,7 @@ $chkNoLockSleep.Add_CheckedChanged({
         [System.Windows.Forms.MessageBox]::Show("Không đổi được cài đặt khóa sau Sleep:`n$($_.Exception.Message)", 'Cài đặt Sleep', 'OK', 'Warning') | Out-Null
     }
 })
-$chkNotify = New-Object System.Windows.Forms.CheckBox
-$chkNotify.Location = New-Object System.Drawing.Point(390, 27); $chkNotify.Size = New-Object System.Drawing.Size(115, 26)
-$chkNotify.Text = 'Hiện thông báo'; $chkNotify.Checked = ($PanelConfig.notifications -ne $false)
-$gGeneral.Controls.Add($chkNotify)
-$chkNotify.Add_CheckedChanged({
-    $PanelConfig.notifications = [bool]$chkNotify.Checked
-    try { Save-PanelConfig $PanelConfig } catch { }
-    if ($miTrayNotify -and $miTrayNotify.Checked -ne $chkNotify.Checked) { $miTrayNotify.Checked = $chkNotify.Checked }
-    Set-Status $(if ($chkNotify.Checked) { 'Đã bật thông báo ở khay hệ thống.' } else { 'Đã tắt thông báo ở khay hệ thống.' })
-})
 $sleepLockTip = New-Object System.Windows.Forms.ToolTip
-$sleepLockTip.SetToolTip($chkNotify, 'Bật/tắt bóng thông báo ở khay hệ thống (mục tiêu, cảnh báo, có bản mới...).')
 $sleepLockTip.SetToolTip($chkNoLockSleep, 'Bật: không yêu cầu đăng nhập sau khi thức dậy. Tắt: giữ hành vi khóa hiện tại của Windows.')
 
 $gAppearance = New-Group 'Giao diện & màu sắc' 122 160 $pageSettings
@@ -5515,7 +5517,7 @@ function Set-NavLayout {
     $dr = $tabs.DisplayRectangle
     $tl = $sw + 10 - $dr.X; $tt = $HeaderH + 8 - $dr.Y
     $tabs.SetBounds($tl, $tt, ($cw - 10 + ($tabs.Width - $dr.Right) - $tl), ($tabs.Bottom - $tt))
-    $chkLogon.Left = 16 + $sw; $chkAuto.Left = 280 + $sw
+    $chkLogon.Left = 16 + $sw; $chkAuto.Left = 280 + $sw; $chkNotify.Left = 520 + $sw
     $right = $statusLbl.Right; $statusLbl.Left = 16 + $sw; $statusLbl.Width = [math]::Max(100, $right - $statusLbl.Left)
     Update-TabsRegion
     $header.Invalidate(); $sideNav.Invalidate()
@@ -5813,7 +5815,7 @@ $form.Add_Shown({
 $form.Add_Load({
 foreach ($pg in $tabs.TabPages) { $pg.Bounds = $tabs.DisplayRectangle }   # tab chưa chọn cũng phải có kích thước thật
 $tabs.Anchor = 'Top, Bottom, Left, Right'
-$chkLogon.Anchor = 'Bottom, Left'; $chkAuto.Anchor = 'Bottom, Left'
+$chkLogon.Anchor = 'Bottom, Left'; $chkAuto.Anchor = 'Bottom, Left'; $chkNotify.Anchor = 'Bottom, Left'
 $statusLbl.Anchor = 'Bottom, Left, Right'
 foreach ($g in $pageMain.Controls) { if ($g -is [System.Windows.Forms.GroupBox]) { $g.Anchor = 'Top, Left' } }      # vị trí do Update-MainLayout đặt
 $list.Anchor = 'Top, Bottom, Left, Right'
